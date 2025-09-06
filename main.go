@@ -4,8 +4,8 @@ import (
 	"os"
 	"strconv"
 
+	"execray.tracer/internal/tracer"
 	logrus "github.com/sirupsen/logrus"
-	"tracer.mcpe/internal/tracer"
 
 	"github.com/cilium/ebpf/rlimit"
 )

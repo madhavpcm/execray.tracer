@@ -5,4 +5,18 @@ This repo is used to host an ebpf syscall tracer as part of Malicious Codepath E
 ## Build
 
 ### Fetch Linux headers
-`sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h`
+`sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ./internal/tracer/vmlinux.h`
+
+### Build
+```sh
+
+go generate ./internal/tracer
+go build
+
+```
+
+### Run
+
+```
+./execray.tracer <pid>
+```

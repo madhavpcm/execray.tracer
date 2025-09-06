@@ -1,4 +1,4 @@
-module tracer.mcpe
+module execray.tracer
 
 go 1.24.3
 

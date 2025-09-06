@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"execray.tracer/pkg/syscalls"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/sirupsen/logrus"
-	"tracer.mcpe/pkg/syscalls"
 )
 
 type bpfSyscallEvent struct {
