@@ -1,6 +1,6 @@
-# ebpf-syscall-tracer
+# execray.tracer
 
-This repo is used to host an ebpf syscall tracer as part of Malicious Codepath Execution Detection. At the moment this only works with `aarch64` machines.
+This repo is used to host an ebpf syscall tracer as part of execRay (Malicious Codepath Execution Detection). At the moment this only works with `aarch64` machines.
 
 ## Build
 
