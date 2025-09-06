@@ -1,0 +1,4 @@
+.o
+*_bpfel*
+*_bpfeb*
+vmlinux.h
