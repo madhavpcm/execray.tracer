@@ -33,7 +33,7 @@ func (d *Daemon) initDaemon() error {
 	d.log.SetLevel(logrus.DebugLevel)
 
 	// Initialize socket
-	listener, err := net.Listen("unix", "/var/run/execray.tracerd.sock")
+	listener, err := net.Listen("unix", ipc.SocketPath)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (d *Daemon) Serve() error {
 		//isolate socket server and tracer daemon into separate threads
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		return d.serveSocket(gCtx, "/var/run/execray.tracerd.sock")
+		return d.serveSocket(gCtx, ipc.SocketPath)
 	})
 
 	// tracer daemon which listens for ebpf events
@@ -236,8 +236,6 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 }
 
 func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
-	// ... setup and defer logic remains the same ...
-
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -251,13 +249,21 @@ func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
 func (d *Daemon) readLoop(ctx context.Context, cancel context.CancelFunc, decoder *gob.Decoder) {
 	defer cancel()
 	for {
-		var cmd ipc.Command // Decode directly into the specific command type.
+		var cmd ipc.Command
+		// blocking
 		if err := decoder.Decode(&cmd); err != nil {
-			d.log.Printf("Error decoding command from client: %v", err)
-			return
+			d.log.Infof("Error decoding command from client: %v", err)
+			return // Exit on decode error (e.g., connection closed)
 		}
-		// Send the command to the central processor.
-		d.commandChannel <- cmd
+		d.log.Tracef("%v", cmd)
+
+		// Use a select statement to send the command or exit if context is canceled.
+		select {
+		case <-ctx.Done():
+			d.log.Printf("Context canceled, exiting read loop: %v", ctx.Err())
+			return
+		case d.commandChannel <- cmd:
+		}
 	}
 }
 
@@ -335,12 +341,14 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 }
 
 func (d *Daemon) processCommands(ctx context.Context) error {
+	d.log.Info("Command Processor started, waiting for commands...")
 	for {
 		select {
 		case <-ctx.Done():
+			d.log.Info("Context canceled, stopping command processor...")
 			return ctx.Err()
 		case cmd := <-d.commandChannel:
-			d.log.Printf("Processing command: %s", cmd.Type)
+			d.log.Infof("Processing command: %s", cmd.Type)
 
 			switch cmd.Type {
 			case ipc.CmdSetTracingStatus:

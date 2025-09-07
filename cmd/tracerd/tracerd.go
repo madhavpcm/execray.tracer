@@ -10,8 +10,9 @@ import (
 )
 
 func main() {
+	// for gob encoding
 	ipc.Init()
-	//boilerplate
+	// boilerplate
 	if err := rlimit.RemoveMemlock(); err != nil {
 		log.Fatal("Failed to remove rlimit memlock:", err)
 	}

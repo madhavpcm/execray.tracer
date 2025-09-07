@@ -3,7 +3,10 @@ package ipc
 import (
 	"encoding/gob"
 	"fmt"
+	"net"
 )
+
+const SocketPath = "/var/run/execray.tracerd.sock"
 
 // Command is sent from client to daemon.
 // Add Pid <>
@@ -63,3 +66,88 @@ type BpfSyscallEvent struct {
 	// Its size is determined by the largest member of the union.
 	Data [260]uint8 // For write_args_t (4 bytes for len + 256 for buf)
 }
+
+// Client is responsible for communicating with the tracerd daemon.
+type Client struct {
+	conn    net.Conn
+	encoder *gob.Encoder
+	decoder *gob.Decoder
+}
+
+// New creates and returns a new Client connected to the daemon's socket.
+func NewClient() (*Client, error) {
+	conn, err := net.Dial("unix", SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon socket at %s: %w", SocketPath, err)
+	}
+
+	return &Client{
+		conn:    conn,
+		encoder: gob.NewEncoder(conn),
+		decoder: gob.NewDecoder(conn),
+	}, nil
+}
+
+// Close terminates the connection to the daemon.
+func (c *Client) Close() error {
+	return c.conn.Close()
+}
+
+// sendCommand is a helper function to wrap and send a command.
+func (c *Client) sendCommand(cmdType CommandType, payload any) error {
+	cmd := Command{
+		Type:    cmdType,
+		Payload: payload,
+	}
+	return c.encoder.Encode(&cmd)
+}
+
+// AddPid sends a command to the daemon to start tracing a specific PID.
+func (c *Client) AddPid(pid uint32) error {
+	payload := PidPayload{Pid: pid}
+	return c.sendCommand(CmdAddPid, payload)
+}
+
+// RemovePid sends a command to the daemon to stop tracing a specific PID.
+func (c *Client) RemovePid(pid uint32) error {
+	payload := PidPayload{Pid: pid}
+	return c.sendCommand(CmdRemovePid, payload)
+}
+
+// SetTracingStatus sends a command to enable or disable tracing globally.
+func (c *Client) SetTracingStatus(enabled bool) error {
+	payload := SetTracingStatusPayload{Enabled: enabled}
+	return c.sendCommand(CmdSetTracingStatus, payload)
+}
+
+//// StreamEvents connects to the daemon and listens for eBPF events.
+//// This is a blocking call. It will send events to the provided eventChan.
+//// The operation can be cancelled via the context.
+//func (c *Client) StreamEvents(ctx context.Context, eventChan chan<- protocol.BpfSyscallEvent) error {
+//	// Goroutine to close the connection when the context is canceled.
+//	// This will cause the decoder.Decode() to unblock with an error.
+//	go func() {
+//		<-ctx.Done()
+//		c.conn.Close()
+//	}()
+//
+//	for {
+//		var event protocol.BpfSyscallEvent
+//		if err := c.decoder.Decode(&event); err != nil {
+//			// If the context was canceled, we expect an error here, so we return nil.
+//			select {
+//			case <-ctx.Done():
+//				return context.Canceled
+//			default:
+//				return fmt.Errorf("failed to decode event from daemon: %w", err)
+//			}
+//		}
+//
+//		// Send the decoded event to the channel.
+//		select {
+//		case eventChan <- event:
+//		case <-ctx.Done():
+//			return context.Canceled
+//		}
+//	}
+//}
