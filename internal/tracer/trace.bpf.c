@@ -70,6 +70,13 @@ struct
     __uint(max_entries, 256 * 1024); // 256 KB
 } rb SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u32);   // Process ID
+    __type(value, __u8);  // A simple boolean-like flag (e.g., 1 for true)
+} allowed_pids SEC(".maps");
+
 // Target PID to trace.
 volatile const pid_t target_pid = 0;
 
@@ -78,9 +85,11 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx)
 {
     u64 id = bpf_get_current_pid_tgid();
     u32 pid = id >> 32;
+    void *is_allowed;
 
-    if (pid != target_pid)
-    {
+    is_allowed = bpf_map_lookup_elem(&allowed_pids, &pid);
+    if (!is_allowed) {
+        // If the PID is NOT in the map, do nothing and exit immediately.
         return 0;
     }
 
