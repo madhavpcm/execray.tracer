@@ -16,15 +16,10 @@ func main() {
 	// ... existing flag parsing ...
 
 	switch command {
-	case "start":
-		startDaemon()
-	case "stop":
-		// You could use the existing signal-based stop,
-		// or convert it to send an IPC command.
-		sendCommand(ipc.Command{Action: "stop"})
-	case "status":
-		// A new command to demonstrate sending a struct
-		sendCommand(ipc.Command{Action: "status"})
+	case "add":
+		sendCommand(ipc.Command{Action: "add"})
+	case "del":
+		sendCommand(ipc.Command{Action: "rem"})
 	default:
 		// ...
 	}

@@ -13,9 +13,7 @@ const (
 )
 
 type SyscallDataParser interface {
-	// Parse reads from the byte reader and populates the struct.
 	Parse(reader *bytes.Reader) error
-	// String returns a formatted string representation of the event.
 	String() string
 }
 

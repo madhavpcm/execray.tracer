@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"execray.tracer/pkg/ipc"
@@ -22,30 +23,89 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type bpfSyscallEvent struct {
-	Ts        uint64
-	Pid       uint64 // Notice that in bpf struct is 32bit but we have to 64bit align in aarch64
-	SyscallNr uint64
-	Args      [6]uint64
-	// The C union is represented as a byte array.
-	// Its size is determined by the largest member of the union.
-	Data [260]uint8 // For write_args_t (4 bytes for len + 256 for buf)
+func (d *Daemon) initDaemon() error {
+	// Exit handling
+	d.gracefulExit = make(chan os.Signal, 1)
+	signal.Notify(d.gracefulExit, os.Interrupt, syscall.SIGTERM)
+
+	// Logger
+	d.log = logrus.New()
+	d.log.SetLevel(logrus.DebugLevel)
+
+	// Initialize socket
+	listener, err := net.Listen("unix", "/var/run/execray.tracerd.sock")
+	if err != nil {
+		return err
+	}
+	d.socketListener = listener
+
+	// Initialize BPF object tracer
+	tracerSpec, err := loadTracer()
+	if err != nil {
+		d.log.Errorf("%v", err)
+		return fmt.Errorf("loading of eBPF object spec failed: %v", err)
+	}
+	d.log.Debugf("hi")
+	d.log.Debugf("%v", tracerSpec.Variables["target_pid"])
+	//if err := tracerSpec.Variables["target_pid"].Set(uint32(pid)); err != nil {
+	//	d.log.Errorf("%v", err)
+	//	return fmt.Errorf("setting of eBPF object vars failed: %v", err)
+	//}
+	if err := tracerSpec.LoadAndAssign(&d.ebpfProgram, nil); err != nil {
+		d.log.Errorf("%v", err)
+		return fmt.Errorf("error loading eBPF object: %v", err)
+	}
+
+	// Link Tracepoint
+	tp, err := link.Tracepoint("raw_syscalls", "sys_enter", d.ebpfProgram.HandleSysEnter, nil)
+	if err != nil {
+		d.log.Errorf("%v", err)
+		return fmt.Errorf("error attaching tracepoint : %v", err)
+	}
+	d.tracePoint = tp
+
+	d.log.Println("Tracepoint attached. Waiting for events... Press Ctrl+C to exit.")
+
+	// Connect to shared ringbuffer
+	buffer, err := ringbuf.NewReader(d.ebpfProgram.Rb)
+	if err != nil {
+		d.log.Errorf("%v", err)
+		return fmt.Errorf("opening ring buffer: %v", err)
+	}
+	d.ringBuffer = buffer
+	return nil
 }
 
 type Daemon struct {
-	mutex          sync.Mutex
-	pids           map[int]struct{}
-	log            *logrus.Logger
-	ringBuffer     *ringbuf.Reader
+	log *logrus.Logger
+
+	// daemon sync
+	commandMutex sync.Mutex
+
+	// daemon
 	gracefulExit   chan os.Signal
 	socketListener net.Listener
 	tracePoint     link.Link
-	ebpfProgram    tracerObjects
+
+	// daemon cfg
+	TracingEnabled bool
+
+	// ebpf commands
+	ebpfProgram tracerObjects
+	ringBuffer  *ringbuf.Reader
+
+	// IPC
+	// Atomically stores the active net.Conn to ensure only one client.
+	activeConn atomic.Pointer[net.Conn]
+	// Channel to send events from tracer to the single client handler.
+	traceChannel chan ipc.BpfSyscallEvent
+	// Channel to parse tracerctl commands
+	commandChannel chan ipc.Command
 }
 
-func NewDaemon(pid int) (*Daemon, error) {
+func NewDaemon() (*Daemon, error) {
 	d := &Daemon{}
-	if err := d.initDaemon(pid); err != nil {
+	if err := d.initDaemon(); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -85,6 +145,10 @@ func (d *Daemon) Serve() error {
 		return d.tracerDaemon(gCtx)
 	})
 
+	g.Go(func() error {
+		return d.processCommands(gCtx)
+	})
+
 	d.log.Println("Daemon started successfully. Press Ctrl+C to exit.")
 
 	// Wait for all goroutines to finish.
@@ -98,7 +162,7 @@ func (d *Daemon) Serve() error {
 	return nil
 }
 
-func printSyscallEvent(e *bpfSyscallEvent, log *logrus.Logger) {
+func printSyscallEvent(e *ipc.BpfSyscallEvent, log *logrus.Logger) {
 	// Create a new parser instance for this event.
 	dataReader := bytes.NewReader(e.Data[:])
 	parserFactory, err := syscalls.SyscallParser(e.SyscallNr)
@@ -130,7 +194,7 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 	// Create a listener. The net.ListenConfig struct respects the context
 	// for the listen operation itself, but we still need to handle Accept().
 	lc := net.ListenConfig{}
-	listener, err := lc.Listen(ctx, "unix", socketPath)
+	socketListener, err := lc.Listen(ctx, "unix", socketPath)
 	if err != nil {
 		d.log.Errorf("Failed to listen on socket: %v", err)
 		return err
@@ -141,51 +205,75 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 		<-ctx.Done() // Block until context is canceled.
 		d.log.Info("Context canceled, closing socket listener...")
 		// Closing the listener will cause the Accept() call below to unblock.
-		listener.Close()
+		socketListener.Close()
 	}()
 
 	d.log.Info("Socket server listening on ", socketPath)
 	for {
-		conn, err := listener.Accept()
+		conn, err := socketListener.Accept()
+		// handle accept after close
 		if err != nil {
-			// 2. After listener.Close() is called, Accept() returns an error.
-			// We check if the context is done to confirm this was a graceful shutdown.
 			select {
 			case <-ctx.Done():
 				d.log.Info("Socket listener shut down gracefully.")
 				return ctx.Err() // Returns context.Canceled
 			default:
-				// This is an unexpected error.
 				d.log.Errorf("Socket accept error: %v", err)
 				return err
 			}
 		}
 
+		// only ensure one client can send data
+		if !d.activeConn.CompareAndSwap(nil, &conn) {
+			d.log.Println("Rejecting new client; a client is already connected.")
+			conn.Close()
+			continue
+		}
+
 		// Handle the new connection in its own goroutine.
-		go d.handleSocketConnection(conn)
+		go d.handleSocketConnection(ctx, conn)
 	}
 }
 
-func (d *Daemon) handleSocketConnection(conn net.Conn) {
-	defer conn.Close()
+func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
+	// ... setup and defer logic remains the same ...
 
-	var cmd ipc.Command
-	if err := json.NewDecoder(conn).Decode(&cmd); err != nil {
-		return
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Pass the gob Encoder/Decoder to the loops.
+	go d.readLoop(connCtx, cancel, gob.NewDecoder(conn))
+	go d.writeLoop(connCtx, cancel, gob.NewEncoder(conn))
+
+	<-connCtx.Done()
+}
+
+func (d *Daemon) readLoop(ctx context.Context, cancel context.CancelFunc, decoder *gob.Decoder) {
+	defer cancel()
+	for {
+		var cmd ipc.Command // Decode directly into the specific command type.
+		if err := decoder.Decode(&cmd); err != nil {
+			d.log.Printf("Error decoding command from client: %v", err)
+			return
+		}
+		// Send the command to the central processor.
+		d.commandChannel <- cmd
 	}
+}
 
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	switch cmd.Action {
-	case "add":
-		d.pids[cmd.PID] = struct{}{}
-		conn.Write([]byte(fmt.Sprintf("added %d\n", cmd.PID)))
-	case "remove":
-		delete(d.pids, cmd.PID)
-		conn.Write([]byte(fmt.Sprintf("removed %d\n", cmd.PID)))
-	default:
-		conn.Write([]byte("unknown command\n"))
+// writeLoop reads from the dedicated event channel.
+func (d *Daemon) writeLoop(ctx context.Context, cancel context.CancelFunc, encoder *gob.Encoder) {
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-d.traceChannel: // Receives a bpfSyscallEvent
+			if err := encoder.Encode(&event); err != nil {
+				d.log.Printf("Error encoding event to client: %v", err)
+				return
+			}
+		}
 	}
 }
 
@@ -212,59 +300,6 @@ func (d *Daemon) Close() error {
 	return errors.Join(errs...)
 }
 
-func (d *Daemon) initDaemon(pid int) error {
-	// Exit handling
-	d.gracefulExit = make(chan os.Signal, 1)
-	signal.Notify(d.gracefulExit, os.Interrupt, syscall.SIGTERM)
-
-	// Logger
-	d.log = logrus.New()
-	d.log.SetLevel(logrus.DebugLevel)
-
-	// Initialize socket
-	listener, err := net.Listen("unix", "/var/run/execray.tracerd.sock")
-	if err != nil {
-		return err
-	}
-	d.socketListener = listener
-
-	// Initialize BPF object tracer
-	tracerSpec, err := loadTracer()
-	if err != nil {
-		d.log.Errorf("%v", err)
-		return fmt.Errorf("loading of eBPF object spec failed: %v", err)
-	}
-	d.log.Debugf("hi")
-	d.log.Debugf("%v", tracerSpec.Variables["target_pid"])
-	if err := tracerSpec.Variables["target_pid"].Set(uint32(pid)); err != nil {
-		d.log.Errorf("%v", err)
-		return fmt.Errorf("setting of eBPF object vars failed: %v", err)
-	}
-	if err := tracerSpec.LoadAndAssign(&d.ebpfProgram, nil); err != nil {
-		d.log.Errorf("%v", err)
-		return fmt.Errorf("error loading eBPF object: %v", err)
-	}
-
-	// Link Tracepoint
-	tp, err := link.Tracepoint("raw_syscalls", "sys_enter", d.ebpfProgram.HandleSysEnter, nil)
-	if err != nil {
-		d.log.Errorf("%v", err)
-		return fmt.Errorf("error attaching tracepoint : %v", err)
-	}
-	d.tracePoint = tp
-
-	d.log.Println("Tracepoint attached. Waiting for events... Press Ctrl+C to exit.")
-
-	// Connect to shared ringbuffer
-	buffer, err := ringbuf.NewReader(d.ebpfProgram.Rb)
-	if err != nil {
-		d.log.Errorf("%v", err)
-		return fmt.Errorf("opening ring buffer: %v", err)
-	}
-	d.ringBuffer = buffer
-	return nil
-}
-
 func (d *Daemon) tracerDaemon(ctx context.Context) error {
 	// 1. Launch a goroutine to close the ring buffer when the context is canceled.
 	go func() {
@@ -276,7 +311,7 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 	}()
 
 	d.log.Info("Tracer daemon started, waiting for eBPF events...")
-	var event bpfSyscallEvent
+	var event ipc.BpfSyscallEvent
 	for {
 		record, err := d.ringBuffer.Read()
 		if err != nil {
@@ -296,5 +331,61 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 		}
 
 		printSyscallEvent(&event, d.log)
+	}
+}
+
+func (d *Daemon) processCommands(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case cmd := <-d.commandChannel:
+			d.log.Printf("Processing command: %s", cmd.Type)
+
+			switch cmd.Type {
+			case ipc.CmdSetTracingStatus:
+				// Type-assert the payload to the correct struct.
+				if payload, ok := cmd.Payload.(ipc.SetTracingStatusPayload); ok {
+					d.commandMutex.Lock()
+					d.TracingEnabled = payload.Enabled
+					d.commandMutex.Unlock()
+					d.log.Printf("Tracing enabled status set to: %v", payload.Enabled)
+				} else {
+					d.log.Printf("Invalid payload for %s", cmd.Type)
+				}
+
+			case ipc.CmdAddPid:
+				if payload, ok := cmd.Payload.(ipc.PidPayload); ok {
+					d.commandMutex.Lock()
+					//FIXME validate if this PID exists in userspace
+					err := d.ebpfProgram.tracerMaps.AllowedPids.Put(payload.Pid, struct{}{})
+					if err != nil {
+						d.log.Printf("Failed to sync (add) PID %d to eBPF map: %v", payload.Pid, err)
+						continue
+					}
+					d.commandMutex.Unlock()
+					d.log.Printf("Added PID to trace list: %d", payload.Pid)
+				} else {
+					d.log.Printf("Invalid payload for %s", cmd.Type)
+				}
+
+			case ipc.CmdRemovePid:
+				if payload, ok := cmd.Payload.(ipc.PidPayload); ok {
+					d.commandMutex.Lock()
+					err := d.ebpfProgram.tracerMaps.AllowedPids.Delete(payload.Pid)
+					if err != nil {
+						d.log.Printf("Failed to sync (remove) PID %d from eBPF map: %v", payload.Pid, err)
+						continue
+					}
+					d.commandMutex.Unlock()
+					d.log.Printf("Removed PID from trace list: %d", payload.Pid)
+				} else {
+					d.log.Printf("Invalid payload for %s", cmd.Type)
+				}
+
+			default:
+				d.log.Printf("Unknown command type: %s", cmd.Type)
+			}
+		}
 	}
 }
