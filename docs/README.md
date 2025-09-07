@@ -43,7 +43,7 @@ const SocketPathCommands = "/var/run/tracerd.commands.sock" // daemon can be con
 
 #### tracercli
 
-You can run `./tracercli` for CLI help and autocompletions.
+You can run `sudo ./tracercli` for CLI help and autocompletions.
 
 ```
 Usage:
@@ -60,7 +60,7 @@ Available Commands:
 TLDR 
 
 ```bash
-./tracercli add pid 345 #adds pid to tracking list
-./tracercli remove pid 345 # removes pid from tracking list
-./tracercli get pids # gets tracking list
+sudo ./tracercli add pid 345 #adds pid to tracking list
+sudo ./tracercli remove pid 345 # removes pid from tracking list
+sudo ./tracercli get pids # gets tracking list
 ```
