@@ -11,7 +11,8 @@ This repo is used to host an ebpf syscall tracer as part of execRay (Malicious C
 ```sh
 
 go generate ./internal/tracer
-go build
+go build ./cmd/tracerd
+go build ./cmd/tracercli
 
 ```
 
