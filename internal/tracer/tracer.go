@@ -32,7 +32,7 @@ func (d *Daemon) initDaemon() error {
 	d.log.SetLevel(logrus.DebugLevel)
 
 	// Initialize socket
-	listener, err := net.Listen("unix", ipc.SocketPath)
+	listener, err := net.Listen("unix", ipc.SocketPathTraces)
 	if err != nil {
 		return err
 	}
@@ -99,13 +99,15 @@ type Daemon struct {
 	// Channel to send events from tracer to the single client handler.
 	traceChannel chan ipc.BpfSyscallEvent
 	// Channel to parse tracerctl commands
-	commandChannel chan ipc.Command
+	commandChannelRecv chan ipc.Command
+	commandChannelSend chan ipc.CommandResponse
 }
 
 func NewDaemon() (*Daemon, error) {
 	d := &Daemon{
-		traceChannel:   make(chan ipc.BpfSyscallEvent),
-		commandChannel: make(chan ipc.Command),
+		traceChannel:       make(chan ipc.BpfSyscallEvent),
+		commandChannelRecv: make(chan ipc.Command),
+		commandChannelSend: make(chan ipc.CommandResponse),
 	}
 	if err := d.initDaemon(); err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (d *Daemon) Serve() error {
 		//isolate socket server and tracer daemon into separate threads
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		return d.serveSocket(gCtx, ipc.SocketPath)
+		return d.serveSocket(gCtx, ipc.SocketPathTraces)
 	})
 
 	// tracer daemon which listens for ebpf events
@@ -145,6 +147,12 @@ func (d *Daemon) Serve() error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		return d.tracerDaemon(gCtx)
+	})
+	g.Go(func() error {
+		//isolate socket server and tracer daemon into separate threads
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		return d.serveSocket(gCtx, ipc.SocketPathCommands)
 	})
 
 	g.Go(func() error {
@@ -202,11 +210,9 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 		return err
 	}
 
-	// 1. Launch a goroutine to close the listener when the context is canceled.
 	go func() {
-		<-ctx.Done() // Block until context is canceled.
+		<-ctx.Done()
 		d.log.Info("Context canceled, closing socket listener...")
-		// Closing the listener will cause the Accept() call below to unblock.
 		socketListener.Close()
 	}()
 
@@ -248,21 +254,21 @@ func (d *Daemon) readLoop(ctx context.Context, cancel context.CancelFunc, decode
 	d.log.Infof("Entering readloop from client")
 	defer cancel()
 	for {
-		var cmd ipc.Command
+		var msg ipc.Message
 		// blocking
 		d.log.Debug("checking to decode")
-		if err := decoder.Decode(&cmd); err != nil {
+		if err := decoder.Decode(&msg); err != nil {
 			d.log.Infof("Error decoding command from client: %v", err)
 			return
 		}
-		d.log.Debugf("Decoded value: %v", cmd)
+		d.log.Debugf("Decoded value: %v", msg.Command)
 
 		// Use a select statement to send the command or exit if context is canceled.
 		select {
 		case <-ctx.Done():
 			d.log.Printf("Context canceled, exiting read loop: %v", ctx.Err())
 			return
-		case d.commandChannel <- cmd:
+		case d.commandChannelRecv <- *msg.Command:
 		}
 	}
 }
@@ -277,6 +283,14 @@ func (d *Daemon) writeLoop(ctx context.Context, cancel context.CancelFunc, encod
 		case event := <-d.traceChannel: // Receives a bpfSyscallEvent
 			if err := encoder.Encode(&event); err != nil {
 				d.log.Printf("Error encoding event to client: %v", err)
+				return
+			}
+		case cmdResponse := <-d.commandChannelSend:
+			var msg ipc.Message
+			msg.CommandResponse = &cmdResponse
+			d.log.Debugf("encoding cmdresponse: %v", msg)
+			if err := encoder.Encode(&msg); err != nil {
+				d.log.Printf("Error ecoding event to client: %v", err)
 				return
 			}
 		}
@@ -347,7 +361,7 @@ func (d *Daemon) processCommands(ctx context.Context) error {
 		case <-ctx.Done():
 			d.log.Info("Context canceled, stopping command processor...")
 			return ctx.Err()
-		case cmd := <-d.commandChannel:
+		case cmd := <-d.commandChannelRecv:
 			d.log.Infof("Processing command: %s", cmd.Type)
 
 			switch cmd.Type {
@@ -391,9 +405,36 @@ func (d *Daemon) processCommands(ctx context.Context) error {
 					d.log.Printf("Invalid payload for %s", cmd.Type)
 				}
 
+			case ipc.CmdGetPids:
+				d.commandMutex.Lock()
+				pids, err := d.fetchPidsFromEbpfMap()
+				var response ipc.CommandResponse
+				response.Type = ipc.CmdGetPids
+				response.Payload = &ipc.PidListResponse{PIDs: pids, Error: fmt.Sprintf("%v", err)}
+				d.log.Printf("Sending currently tracked pids: %v", pids)
+				d.commandChannelSend <- response
+				d.commandMutex.Unlock()
+
 			default:
 				d.log.Printf("Unknown command type: %s", cmd.Type)
 			}
 		}
 	}
+}
+
+func (d *Daemon) fetchPidsFromEbpfMap() ([]uint32, error) {
+	pids := make([]uint32, 0)
+	var key uint32
+	var value byte
+
+	iterator := d.ebpfProgram.tracerMaps.AllowedPids.Iterate()
+	for iterator.Next(&key, &value) {
+		pids = append(pids, key)
+	}
+
+	if err := iterator.Err(); err != nil {
+		return nil, err
+	}
+
+	return pids, nil
 }

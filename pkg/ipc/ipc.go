@@ -3,10 +3,12 @@ package ipc
 import (
 	"encoding/gob"
 	"fmt"
+	"log"
 	"net"
 )
 
-const SocketPath = "/var/run/execray.tracerd.sock"
+const SocketPathTraces = "/var/run/tracerd.traces.sock"
+const SocketPathCommands = "/var/run/tracerd.commands.sock"
 
 // Command is sent from client to daemon.
 // Add Pid <>
@@ -22,6 +24,8 @@ const (
 	CmdAddPid
 	// CmdRemovePid removes a specific process ID from the trace list.
 	CmdRemovePid
+	// CmdGetPid sends the list of pids in tracking list
+	CmdGetPids
 )
 
 func (c CommandType) String() string {
@@ -32,12 +36,25 @@ func (c CommandType) String() string {
 		return "CmdAddPid"
 	case CmdRemovePid:
 		return "CmdRemovePid"
+	case CmdGetPids:
+		return "CmdGetPids"
 	default:
 		return fmt.Sprintf("CmdUnknown(%d)", c)
 	}
 }
 
+type Message struct {
+	RequestID       string
+	Command         *Command
+	CommandResponse *CommandResponse
+}
+
 type Command struct {
+	Type    CommandType
+	Payload any
+}
+
+type CommandResponse struct {
 	Type    CommandType
 	Payload any
 }
@@ -50,11 +67,18 @@ type PidPayload struct {
 	Pid uint32
 }
 
+// PidListResponse is sent from the daemon back to the client.
+type PidListResponse struct {
+	PIDs  []uint32 // A list of Process IDs
+	Error string   // In case something went wrong
+}
+
 func Init() {
 	// Register all the payload structs for gob encoding.
 	gob.Register(SetTracingStatusPayload{})
 	gob.Register(PidPayload{})
 	gob.Register(BpfSyscallEvent{})
+	gob.Register(PidListResponse{})
 }
 
 type BpfSyscallEvent struct {
@@ -76,9 +100,9 @@ type Client struct {
 
 // New creates and returns a new Client connected to the daemon's socket.
 func NewClient() (*Client, error) {
-	conn, err := net.Dial("unix", SocketPath)
+	conn, err := net.Dial("unix", SocketPathCommands)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to daemon socket at %s: %w", SocketPath, err)
+		return nil, fmt.Errorf("failed to connect to daemon socket at %s: %w", SocketPathTraces, err)
 	}
 
 	return &Client{
@@ -99,7 +123,10 @@ func (c *Client) sendCommand(cmdType CommandType, payload any) error {
 		Type:    cmdType,
 		Payload: payload,
 	}
-	return c.encoder.Encode(&cmd)
+	msg := Message{
+		Command: &cmd,
+	}
+	return c.encoder.Encode(&msg)
 }
 
 // AddPid sends a command to the daemon to start tracing a specific PID.
@@ -118,6 +145,23 @@ func (c *Client) RemovePid(pid uint32) error {
 func (c *Client) SetTracingStatus(enabled bool) error {
 	payload := SetTracingStatusPayload{Enabled: enabled}
 	return c.sendCommand(CmdSetTracingStatus, payload)
+}
+
+// GetPids sends a command to receive all traced pids
+func (c *Client) GetPids() error {
+	if err := c.sendCommand(CmdGetPids, nil); err != nil {
+		return err
+	}
+	var response Message
+	if err := c.decoder.Decode(&response); err != nil {
+		log.Fatalf("Failed to receive response: %v", err)
+	}
+	if payload, ok := response.CommandResponse.Payload.(PidListResponse); ok {
+		log.Printf("Received list of %d PIDs: [%v]", len(payload.PIDs), payload.PIDs)
+	} else {
+		log.Printf("Received an unexpected message type from the daemon: %v", response)
+	}
+	return nil
 }
 
 //// StreamEvents connects to the daemon and listens for eBPF events.
