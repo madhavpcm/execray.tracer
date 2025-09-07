@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 
 	"execray.tracer/pkg/ipc"
@@ -73,6 +72,8 @@ func (d *Daemon) initDaemon() error {
 		return fmt.Errorf("opening ring buffer: %v", err)
 	}
 	d.ringBuffer = buffer
+
+	// channels
 	return nil
 }
 
@@ -95,8 +96,6 @@ type Daemon struct {
 	ringBuffer  *ringbuf.Reader
 
 	// IPC
-	// Atomically stores the active net.Conn to ensure only one client.
-	activeConn atomic.Pointer[net.Conn]
 	// Channel to send events from tracer to the single client handler.
 	traceChannel chan ipc.BpfSyscallEvent
 	// Channel to parse tracerctl commands
@@ -104,7 +103,10 @@ type Daemon struct {
 }
 
 func NewDaemon() (*Daemon, error) {
-	d := &Daemon{}
+	d := &Daemon{
+		traceChannel:   make(chan ipc.BpfSyscallEvent),
+		commandChannel: make(chan ipc.Command),
+	}
 	if err := d.initDaemon(); err != nil {
 		return nil, err
 	}
@@ -210,7 +212,9 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 
 	d.log.Info("Socket server listening on ", socketPath)
 	for {
+		d.log.Debugf("accepting for connections")
 		conn, err := socketListener.Accept()
+		d.log.Debugf("accepted for connections")
 		// handle accept after close
 		if err != nil {
 			select {
@@ -223,19 +227,13 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 			}
 		}
 
-		// only ensure one client can send data
-		if !d.activeConn.CompareAndSwap(nil, &conn) {
-			d.log.Println("Rejecting new client; a client is already connected.")
-			conn.Close()
-			continue
-		}
-
 		// Handle the new connection in its own goroutine.
 		go d.handleSocketConnection(ctx, conn)
 	}
 }
 
 func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
+	d.log.Debug("entering handlesocket")
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -247,15 +245,17 @@ func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
 }
 
 func (d *Daemon) readLoop(ctx context.Context, cancel context.CancelFunc, decoder *gob.Decoder) {
+	d.log.Infof("Entering readloop from client")
 	defer cancel()
 	for {
 		var cmd ipc.Command
 		// blocking
+		d.log.Debug("checking to decode")
 		if err := decoder.Decode(&cmd); err != nil {
 			d.log.Infof("Error decoding command from client: %v", err)
-			return // Exit on decode error (e.g., connection closed)
+			return
 		}
-		d.log.Tracef("%v", cmd)
+		d.log.Debugf("Decoded value: %v", cmd)
 
 		// Use a select statement to send the command or exit if context is canceled.
 		select {
@@ -366,7 +366,7 @@ func (d *Daemon) processCommands(ctx context.Context) error {
 				if payload, ok := cmd.Payload.(ipc.PidPayload); ok {
 					d.commandMutex.Lock()
 					//FIXME validate if this PID exists in userspace
-					err := d.ebpfProgram.tracerMaps.AllowedPids.Put(payload.Pid, struct{}{})
+					err := d.ebpfProgram.tracerMaps.AllowedPids.Put(payload.Pid, true)
 					if err != nil {
 						d.log.Printf("Failed to sync (add) PID %d to eBPF map: %v", payload.Pid, err)
 						continue
