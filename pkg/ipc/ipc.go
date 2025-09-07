@@ -7,6 +7,7 @@ import (
 	"net"
 )
 
+// FIXME add flags for this?
 const SocketPathTraces = "/var/run/tracerd.traces.sock"
 const SocketPathCommands = "/var/run/tracerd.commands.sock"
 
