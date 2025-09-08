@@ -31,13 +31,6 @@ func (d *Daemon) initDaemon() error {
 	d.log = logrus.New()
 	d.log.SetLevel(logrus.DebugLevel)
 
-	// Initialize socket
-	listener, err := net.Listen("unix", ipc.SocketPathTraces)
-	if err != nil {
-		return err
-	}
-	d.socketListener = listener
-
 	// Initialize BPF object tracer
 	tracerSpec, err := loadTracer()
 	if err != nil {
@@ -84,9 +77,8 @@ type Daemon struct {
 	commandMutex sync.Mutex
 
 	// daemon
-	gracefulExit   chan os.Signal
-	socketListener net.Listener
-	tracePoint     link.Link
+	gracefulExit chan os.Signal
+	tracePoint   link.Link
 
 	// daemon cfg
 	TracingEnabled bool
@@ -305,16 +297,14 @@ func (d *Daemon) Close() error {
 			errs = append(errs, fmt.Errorf("ringBuffer: %w", err))
 		}
 	}
-	if d.socketListener != nil {
-		if err := d.socketListener.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("socketListener: %w", err))
-		}
-	}
 	if d.tracePoint != nil {
 		if err := d.tracePoint.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("tracePoint: %w", err))
 		}
 	}
+
+	close(d.commandChannelRecv)
+	close(d.commandChannelSend)
 	d.log.Debugf("%v", errors.Join(errs...))
 
 	return errors.Join(errs...)
