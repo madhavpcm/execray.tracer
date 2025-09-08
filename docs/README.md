@@ -2,6 +2,8 @@
 
 This repo is used to host an ebpf syscall tracer as part of execRay (Malicious Codepath Execution Detection). At the moment this only works with `aarch64` machines.
 
+<img width="1286" height="673" alt="image" src="https://github.com/user-attachments/assets/f3992c04-d84c-4bc3-8512-7532d8e853bb" />
+
 
 ## Build
 
