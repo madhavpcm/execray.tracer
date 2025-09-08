@@ -233,9 +233,25 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 			}
 		}
 
-		// Handle the new connection in its own goroutine.
-		go d.handleSocketConnection(ctx, conn)
+		if socketPath == ipc.SocketPathTraces {
+			// Traces socket: only writeLoop (send events to clients)
+			go d.handleTracesConnection(ctx, conn)
+		} else {
+			// Commands socket: both readLoop and writeLoop
+			go d.handleSocketConnection(ctx, conn)
+		}
 	}
+}
+
+func (d *Daemon) handleTracesConnection(ctx context.Context, conn net.Conn) {
+	d.log.Debug("entering traces connection handler")
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Only start writeLoop for traces clients
+	go d.writeLoop(connCtx, cancel, gob.NewEncoder(conn))
+
+	<-connCtx.Done()
 }
 
 func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
@@ -351,6 +367,17 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 		}
 
 		printSyscallEvent(&event, d.log)
+
+		// Send event to clients via channel
+		select {
+		case d.traceChannel <- event:
+			// Event sent successfully
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Channel full, drop event to avoid blocking
+			d.log.Warnf("Trace channel full, dropping event")
+		}
 	}
 }
 
