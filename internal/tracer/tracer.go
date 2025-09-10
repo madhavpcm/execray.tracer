@@ -13,9 +13,9 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 
 	"execray.tracer/pkg/ipc"
-	"execray.tracer/pkg/syscalls"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/sirupsen/logrus"
@@ -30,13 +30,6 @@ func (d *Daemon) initDaemon() error {
 	// Logger
 	d.log = logrus.New()
 	d.log.SetLevel(logrus.DebugLevel)
-
-	// Initialize socket
-	listener, err := net.Listen("unix", ipc.SocketPathTraces)
-	if err != nil {
-		return err
-	}
-	d.socketListener = listener
 
 	// Initialize BPF object tracer
 	tracerSpec, err := loadTracer()
@@ -84,9 +77,8 @@ type Daemon struct {
 	commandMutex sync.Mutex
 
 	// daemon
-	gracefulExit   chan os.Signal
-	socketListener net.Listener
-	tracePoint     link.Link
+	gracefulExit chan os.Signal
+	tracePoint   link.Link
 
 	// daemon cfg
 	TracingEnabled bool
@@ -97,17 +89,20 @@ type Daemon struct {
 
 	// IPC
 	// Channel to send events from tracer to the single client handler.
-	traceChannel chan ipc.BpfSyscallEvent
+	traceEventsChannel chan ipc.BpfSyscallEvent
+	ebpfEventsChannel  chan []byte
 	// Channel to parse tracerctl commands
-	commandChannelRecv chan ipc.Command
-	commandChannelSend chan ipc.CommandResponse
+	commandChannelRead  chan ipc.Command
+	commandChannelWrite chan ipc.CommandResponse
 }
 
 func NewDaemon() (*Daemon, error) {
 	d := &Daemon{
-		traceChannel:       make(chan ipc.BpfSyscallEvent),
-		commandChannelRecv: make(chan ipc.Command),
-		commandChannelSend: make(chan ipc.CommandResponse),
+		// buffer of 1024 traces
+		ebpfEventsChannel:   make(chan []byte, 256),
+		commandChannelRead:  make(chan ipc.Command),
+		commandChannelWrite: make(chan ipc.CommandResponse),
+		traceEventsChannel:  make(chan ipc.BpfSyscallEvent, 256),
 	}
 	if err := d.initDaemon(); err != nil {
 		return nil, err
@@ -119,6 +114,7 @@ func (d *Daemon) Serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	g, gCtx := errgroup.WithContext(ctx)
 	defer cancel()
+
 	g.Go(func() error {
 		signalChan := make(chan os.Signal, 1)
 		signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
@@ -134,24 +130,14 @@ func (d *Daemon) Serve() error {
 		}
 	})
 
-	// socket server
-	g.Go(func() error {
-		//isolate socket server and tracer daemon into separate threads
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		return d.serveSocket(gCtx, ipc.SocketPathTraces)
-	})
-
 	// tracer daemon which listens for ebpf events
 	g.Go(func() error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		return d.tracerDaemon(gCtx)
 	})
+
 	g.Go(func() error {
-		//isolate socket server and tracer daemon into separate threads
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
 		return d.serveSocket(gCtx, ipc.SocketPathCommands)
 	})
 
@@ -165,6 +151,8 @@ func (d *Daemon) Serve() error {
 	// If any goroutine returns an error, g.Wait() will return it.
 	if err := g.Wait(); err != nil && err != context.Canceled {
 		// We ignore context.Canceled because it's the expected error on shutdown.
+		cancel()
+		d.Close()
 		return fmt.Errorf("daemon stopped with error: %w", err)
 	}
 
@@ -172,28 +160,9 @@ func (d *Daemon) Serve() error {
 	return nil
 }
 
-func printSyscallEvent(e *ipc.BpfSyscallEvent, log *logrus.Logger) {
-	// Create a new parser instance for this event.
-	dataReader := bytes.NewReader(e.Data[:])
-	parserFactory, err := syscalls.SyscallParser(e.SyscallNr)
-	if err != nil {
-		log.Fatalf("failed to run: %v", err)
-	}
-	parser := parserFactory()
-	log.Printf("PID: %d, Syscall: %d (untracked)", e.Pid, e.SyscallNr)
-
-	// Parse the data from the union.
-	if err := parser.Parse(dataReader); err != nil {
-		log.Printf("PID: %d, Syscall: %d, Error parsing args: %v", e.Pid, e.SyscallNr, err)
-		return
-	}
-
-	// Print the formatted string from the parser.
-	log.Printf("PID: %d, Syscall: %s", e.Pid, parser.String())
-}
-
 func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 	// Clean up any old socket file.
+	errChan := make(chan error, 2) // Buffer for 2 (one for read, one for write)
 	if err := os.RemoveAll(socketPath); err != nil {
 		d.log.Errorf("Failed to remove old socket file: %v", err)
 		return err
@@ -214,9 +183,11 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 		<-ctx.Done()
 		d.log.Info("Context canceled, closing socket listener...")
 		socketListener.Close()
+		close(errChan)
 	}()
 
 	d.log.Info("Socket server listening on ", socketPath)
+	// Each socket connnection is handled parallely via goroutines
 	for {
 		d.log.Debugf("accepting for connections")
 		conn, err := socketListener.Accept()
@@ -233,70 +204,103 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 			}
 		}
 
-		// Handle the new connection in its own goroutine.
-		go d.handleSocketConnection(ctx, conn)
+		// Handle the new connection in its own goroutine
+		go d.handleSocketConnection(ctx, conn, errChan)
 	}
 }
+func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn, errChan chan<- error) {
 
-func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn) {
-	d.log.Debug("entering handlesocket")
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// handle socket io in 2 r/w loops
+	switch conn.LocalAddr().String() {
+	case ipc.SocketPathTraces:
+		go d.tracesSocketWriter(ctx, gob.NewEncoder(conn), errChan)
+	case ipc.SocketPathCommands:
+		go d.commandSocketWriter(ctx, gob.NewEncoder(conn), errChan)
+		go d.commandSocketReader(ctx, gob.NewDecoder(conn), errChan)
+	}
 
-	// Pass the gob Encoder/Decoder to the loops.
-	go d.readLoop(connCtx, cancel, gob.NewDecoder(conn))
-	go d.writeLoop(connCtx, cancel, gob.NewEncoder(conn))
+	d.log.Infof("New client connection established. %s", conn.LocalAddr().String())
 
-	<-connCtx.Done()
+	<-ctx.Done()
+	d.log.Printf("socket connection handler: parent context canceled: %v", ctx.Err())
 }
 
-func (d *Daemon) readLoop(ctx context.Context, cancel context.CancelFunc, decoder *gob.Decoder) {
-	d.log.Infof("Entering readloop from client")
-	defer cancel()
+func (d *Daemon) commandSocketReader(ctx context.Context, decoder *gob.Decoder, errChan chan<- error) {
 	for {
 		var msg ipc.Message
-		// blocking
-		d.log.Debug("checking to decode")
-		if err := decoder.Decode(&msg); err != nil {
-			d.log.Infof("Error decoding command from client: %v", err)
+		// ensure conn is owned by handleSocketConnection
+		if conn, ok := ctx.Value("conn").(net.Conn); ok {
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		}
+
+		err := decoder.Decode(&msg)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				select {
+				case <-ctx.Done():
+					// Context was canceled during the read, which is a clean exit.
+					return
+				default:
+					continue
+				}
+			}
+			// A real error (like io.EOF) occurred. Report it and exit.
+			errChan <- fmt.Errorf("error decoding message: %w", err)
 			return
 		}
-		d.log.Debugf("Decoded value: %v", msg.Command)
 
-		// Use a select statement to send the command or exit if context is canceled.
+		// Use a select to avoid blocking if the command channel is full or the context is canceled.
 		select {
+		case d.commandChannelRead <- *msg.Command:
+			d.log.Printf("Received command: %v", msg.Command)
 		case <-ctx.Done():
-			d.log.Printf("Context canceled, exiting read loop: %v", ctx.Err())
+			d.log.Printf("Context canceled during command send: %v", ctx.Err())
 			return
-		case d.commandChannelRecv <- *msg.Command:
 		}
 	}
 }
 
-// writeLoop reads from the dedicated event channel.
-func (d *Daemon) writeLoop(ctx context.Context, cancel context.CancelFunc, encoder *gob.Encoder) {
-	defer cancel()
+func (d *Daemon) commandSocketWriter(ctx context.Context, encoder *gob.Encoder, errChan chan<- error) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Parent handler canceled the context. Clean exit.
 			return
-		case event := <-d.traceChannel: // Receives a bpfSyscallEvent
-			if err := encoder.Encode(&event); err != nil {
-				d.log.Printf("Error encoding event to client: %v", err)
-				return
-			}
-		case cmdResponse := <-d.commandChannelSend:
-			var msg ipc.Message
-			msg.CommandResponse = &cmdResponse
-			d.log.Debugf("encoding cmdresponse: %v", msg)
+
+		case cmdResponse := <-d.commandChannelWrite:
+			msg := ipc.Message{CommandResponse: &cmdResponse}
+			d.log.Printf("Sending command response: %v", msg)
 			if err := encoder.Encode(&msg); err != nil {
-				d.log.Printf("Error ecoding event to client: %v", err)
+				errChan <- fmt.Errorf("error encoding command response: %w", err)
 				return
 			}
 		}
 	}
 }
 
+func (d *Daemon) tracesSocketWriter(ctx context.Context, encoder *gob.Encoder, errChan chan<- error) {
+	d.log.Info("Traces Socket writer started.")
+	defer d.log.Info("Traces Socket writer stopped.")
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Context was canceled.
+			return
+
+		case event, ok := <-d.traceEventsChannel:
+			// check if trace channel was prematurely closed
+			if !ok {
+				d.log.Info("Trace channel closed. Exiting socket writer.")
+			}
+
+			if err := encoder.Encode(&event); err != nil {
+				errChan <- fmt.Errorf("error encoding trace event: %w", err)
+				return
+			}
+		}
+	}
+}
 func (d *Daemon) Close() error {
 	var errs []error
 
@@ -305,53 +309,82 @@ func (d *Daemon) Close() error {
 			errs = append(errs, fmt.Errorf("ringBuffer: %w", err))
 		}
 	}
-	if d.socketListener != nil {
-		if err := d.socketListener.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("socketListener: %w", err))
-		}
-	}
 	if d.tracePoint != nil {
 		if err := d.tracePoint.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("tracePoint: %w", err))
 		}
 	}
+
+	close(d.commandChannelRead)
+	close(d.commandChannelWrite)
+	close(d.ebpfEventsChannel)
+	close(d.traceEventsChannel)
+
 	d.log.Debugf("%v", errors.Join(errs...))
+	d.log.Infof("Closing tracerd daemon")
 
 	return errors.Join(errs...)
 }
 
 func (d *Daemon) tracerDaemon(ctx context.Context) error {
-	// 1. Launch a goroutine to close the ring buffer when the context is canceled.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	//Cleanup
 	go func() {
 		<-ctx.Done() // Block until the context is canceled.
-		d.log.Info("Context canceled, closing ring buffer...")
+		wg.Done()
+		d.log.Info("Context canceled, closing tracer daemon...")
 		if err := d.ringBuffer.Close(); err != nil {
-			d.log.Errorf("Error closing ring buffer: %v", err)
+			d.log.Errorf("failed to close ringbuf")
 		}
 	}()
 
+	// ebpf event parser (consumer)
+	go func() {
+		defer wg.Done()
+		var event ipc.BpfSyscallEvent
+
+		// This loop will run until 'eventsChan' is closed and empty.
+		for rawSample := range d.ebpfEventsChannel {
+			d.log.Trace("ebpf consumer: got sample")
+			if err := binary.Read(bytes.NewReader(rawSample), binary.LittleEndian, &event); err != nil {
+				d.log.Tracef("Parsing ringbuf event: %s", err)
+				continue
+			}
+			printSyscallEvent(&event, d.log)
+		}
+		d.log.Info("Event processor has finished.")
+	}()
+
 	d.log.Info("Tracer daemon started, waiting for eBPF events...")
-	var event ipc.BpfSyscallEvent
+
+	// ebpf event fetcher (producer)
 	for {
+		d.log.Info("ebpf producer: waiting for ringbuffer")
 		record, err := d.ringBuffer.Read()
 		if err != nil {
-			// 2. The Read() call will return ringbuf.ErrClosed after d.ringBuffer.Close() is called.
+			// This error is expected on shutdown when the buffer is closed.
 			if errors.Is(err, ringbuf.ErrClosed) {
 				d.log.Info("Ring buffer closed, exiting daemon loop.")
-				// Return ctx.Err() to signal that shutdown was due to cancellation.
-				return ctx.Err()
+				break
 			}
 			d.log.Infof("Reading from reader: %s", err)
 			continue
 		}
 
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
-			d.log.Tracef("Parsing ringbuf event: %s", err)
-			continue
+		d.log.Info("ebpf producer: producing ebpf event")
+		select {
+		case d.ebpfEventsChannel <- record.RawSample:
+			// Event successfully queued.
+		default:
+			d.log.Warn("Event channel buffer is full. Dropping eBPF event.")
 		}
-
-		printSyscallEvent(&event, d.log)
 	}
+
+	wg.Wait()
+	d.log.Info("Tracer daemon shut down gracefully.")
+
+	return ctx.Err()
 }
 
 func (d *Daemon) processCommands(ctx context.Context) error {
@@ -361,7 +394,7 @@ func (d *Daemon) processCommands(ctx context.Context) error {
 		case <-ctx.Done():
 			d.log.Info("Context canceled, stopping command processor...")
 			return ctx.Err()
-		case cmd := <-d.commandChannelRecv:
+		case cmd := <-d.commandChannelRead:
 			d.log.Infof("Processing command: %s", cmd.Type)
 
 			switch cmd.Type {
@@ -412,7 +445,7 @@ func (d *Daemon) processCommands(ctx context.Context) error {
 				response.Type = ipc.CmdGetPids
 				response.Payload = &ipc.PidListResponse{PIDs: pids, Error: fmt.Sprintf("%v", err)}
 				d.log.Printf("Sending currently tracked pids: %v", pids)
-				d.commandChannelSend <- response
+				d.commandChannelWrite <- response
 				d.commandMutex.Unlock()
 
 			default:
