@@ -327,12 +327,9 @@ func (d *Daemon) Close() error {
 }
 
 func (d *Daemon) tracerDaemon(ctx context.Context) error {
-	// 1. Launch a goroutine to close the ring buffer when the context is canceled.
-	// This will cause the d.ringBuffer.Read() call to unblock and return an error.
-
-	// A channel buffer of 256 is a good default to absorb event bursts.
 	var wg sync.WaitGroup
 	wg.Add(1)
+	//Cleanup
 	go func() {
 		<-ctx.Done() // Block until the context is canceled.
 		wg.Done()
@@ -342,8 +339,7 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 		}
 	}()
 
-	// 2. Start a single consumer goroutine for parsing and printing.
-	// This ensures all events are processed sequentially, preserving order.
+	// ebpf event parser (consumer)
 	go func() {
 		defer wg.Done()
 		var event ipc.BpfSyscallEvent
@@ -362,7 +358,7 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 
 	d.log.Info("Tracer daemon started, waiting for eBPF events...")
 
-	// 3. The main function body acts as the producer.
+	// ebpf event fetcher (producer)
 	for {
 		d.log.Info("ebpf producer: waiting for ringbuffer")
 		record, err := d.ringBuffer.Read()
@@ -370,7 +366,7 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 			// This error is expected on shutdown when the buffer is closed.
 			if errors.Is(err, ringbuf.ErrClosed) {
 				d.log.Info("Ring buffer closed, exiting daemon loop.")
-				break // Exit the loop to begin shutdown.
+				break
 			}
 			d.log.Infof("Reading from reader: %s", err)
 			continue
