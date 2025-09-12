@@ -60,18 +60,6 @@ func (re *RuleEngine) EvaluateEvent(event ipc.BpfSyscallEvent) {
 		}
 
 		// Check PID filter if specified
-		if len(rule.PidFilter) > 0 {
-			pidMatch := false
-			for _, pid := range rule.PidFilter {
-				if event.Pid == pid {
-					pidMatch = true
-					break
-				}
-			}
-			if !pidMatch {
-				matched = false
-			}
-		}
 
 		if matched {
 			switch rule.Action {
