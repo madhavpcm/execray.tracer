@@ -61,7 +61,6 @@ func (re *RuleEngine) EvaluateEvent(event ipc.BpfSyscallEvent) {
 
 		// Check PID filter if specified
 
-		if matched {
 			switch rule.Action {
 			case "log":
 				re.log.Printf("Rule %s triggered: PID=%d, Syscall=%d, Timestamp=%d",
