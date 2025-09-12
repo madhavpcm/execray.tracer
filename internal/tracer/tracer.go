@@ -216,18 +216,6 @@ func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn, errC
 		go d.commandSocketReader(ctx, gob.NewDecoder(conn), errChan)
 	}
 
-func (d *Daemon) handleTracesConnection(ctx context.Context, conn net.Conn) {
-	d.log.Debug("entering traces connection handler")
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Only start writeLoop for traces clients
-	go d.writeLoop(connCtx, cancel, gob.NewEncoder(conn))
-
-	<-connCtx.Done()
-}
-
-
 	d.log.Infof("New client connection established. %s", conn.LocalAddr().String())
 	<-ctx.Done()
 	d.log.Printf("socket connection handler: parent context canceled: %v", ctx.Err())
