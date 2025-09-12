@@ -69,7 +69,6 @@ func (re *RuleEngine) EvaluateEvent(event ipc.BpfSyscallEvent) {
 				re.log.Printf("🚨 ALERT! Rule %s: %s (PID=%d, Syscall=%d)",
 					rule.ID, rule.Description, event.Pid, event.SyscallNr)
 			}
-		}
 	}
 }
 
