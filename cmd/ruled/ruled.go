@@ -56,7 +56,7 @@ func (re *RuleEngine) EvaluateEvent(event ipc.BpfSyscallEvent) {
 
 		// Check syscall number
 		if rule.SyscallNr != 0 && event.SyscallNr != rule.SyscallNr {
-			matched = false
+   continue
 		}
 
 		// Check PID filter if specified
