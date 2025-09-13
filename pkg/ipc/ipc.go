@@ -154,15 +154,6 @@ func (c *Client) GetPids() error {
 	if err := c.sendCommand(CmdGetPids, nil); err != nil {
 		return err
 	}
-	var response Message
-	if err := c.decoder.Decode(&response); err != nil {
-		log.Fatalf("Failed to receive response: %v", err)
-	}
-	if payload, ok := response.CommandResponse.Payload.(PidListResponse); ok {
-		log.Printf("Received list of %d PIDs: [%v]", len(payload.PIDs), payload.PIDs)
-	} else {
-		log.Printf("Received an unexpected message type from the daemon: %v", response)
-	}
 	return nil
 }
 
@@ -190,18 +181,4 @@ func StreamEvents(socketPath string) (chan BpfSyscallEvent, net.Conn, error) {
 	}()
 
 	return eventChan, conn, nil
-}
-
-// Add convenience function to create traces client
-func NewTracesClient() (*Client, error) {
-	conn, err := net.Dial("unix", TracerdCommandsSocket)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to traces socket: %w", err)
-	}
-
-	return &Client{
-		conn:    conn,
-		encoder: gob.NewEncoder(conn),
-		decoder: gob.NewDecoder(conn),
-	}, nil
 }

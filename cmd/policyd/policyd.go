@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	ipc.Init()
 	log := logrus.New()
 	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 

@@ -146,6 +146,12 @@ func (d *Daemon) Serve() error {
 		return d.processCommands(gCtx)
 	})
 
+	g.Go(func() error {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		return d.traceSender(gCtx)
+	})
+
 	d.log.Println("Daemon started successfully. Press Ctrl+C to exit.")
 
 	// Wait for all goroutines to finish.
@@ -245,6 +251,7 @@ func (d *Daemon) commandSocketReader(ctx context.Context, decoder *gob.Decoder, 
 		}
 
 		// Use a select to avoid blocking if the command channel is full or the context is canceled.
+		d.log.Printf("command: %v", msg.Command)
 		select {
 		case d.commandChannelRead <- *msg.Command:
 			d.log.Printf("Received command: %v", msg.Command)
@@ -273,29 +280,39 @@ func (d *Daemon) commandSocketWriter(ctx context.Context, encoder *gob.Encoder, 
 	}
 }
 
-func (d *Daemon) tracesSocketWriter(ctx context.Context, encoder *gob.Encoder, errChan chan<- error) {
-	d.log.Info("Traces Socket writer started.")
-	defer d.log.Info("Traces Socket writer stopped.")
+func (d *Daemon) traceSender(ctx context.Context) error {
+	d.log.Println("Trace sender started.")
+	defer d.log.Println("Trace sender stopped.")
+
+	// 1. Create the encoder once, before the loop starts.
+	conn, err := net.Dial("unix", ipc.PolicydTracesSocket)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon socket at %s: %w", ipc.PolicydTracesSocket, err)
+	}
+	defer conn.Close()
+	encoder := gob.NewEncoder(conn)
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Context was canceled.
-			return
+			// Context was canceled, so we exit.
+			return nil
 
 		case event, ok := <-d.traceEventsChannel:
-			// check if trace channel was prematurely closed
 			if !ok {
-				d.log.Info("Trace channel closed. Exiting socket writer.")
+				// 2. The channel was closed. Log and exit the goroutine.
+				d.log.Println("Trace channel closed. Exiting sender.")
 			}
 
+			// Attempt to encode and send the event.
 			if err := encoder.Encode(&event); err != nil {
-				errChan <- fmt.Errorf("error encoding trace event: %w", err)
-				return
+				// If sending fails, report the error and exit.
+				d.log.Errorf("error encoding trace event: %w", err)
 			}
 		}
 	}
 }
+
 func (d *Daemon) Close() error {
 	var errs []error
 
@@ -346,6 +363,7 @@ func (d *Daemon) tracerDaemon(ctx context.Context) error {
 				d.log.Tracef("Parsing ringbuf event: %s", err)
 				continue
 			}
+			d.traceEventsChannel <- event
 			printSyscallEvent(&event, d.log)
 		}
 		d.log.Info("Event processor has finished.")

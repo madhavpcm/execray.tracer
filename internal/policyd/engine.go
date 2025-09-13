@@ -98,9 +98,7 @@ func (d *PolicyEngine) processCommands(ctx context.Context) error {
 
 			case ipc.CmdAddPid:
 				if payload, ok := cmd.Payload.(ipc.PidPayload); ok {
-					d.commandMutex.Lock()
 					d.TrackPid(uint64(payload.Pid))
-					d.commandMutex.Unlock()
 					d.log.Printf("Added PID to trace list: %d", payload.Pid)
 				} else {
 					d.log.Printf("Invalid payload for %s", cmd.Type)
@@ -108,23 +106,15 @@ func (d *PolicyEngine) processCommands(ctx context.Context) error {
 
 			case ipc.CmdRemovePid:
 				if payload, ok := cmd.Payload.(ipc.PidPayload); ok {
-					d.commandMutex.Lock()
 					d.UntrackPid(uint64(payload.Pid))
-					d.commandMutex.Unlock()
 					d.log.Printf("Removed PID from trace list: %d", payload.Pid)
 				} else {
 					d.log.Printf("Invalid payload for %s", cmd.Type)
 				}
 
 			case ipc.CmdGetPids:
-				d.commandMutex.Lock()
 				pids := d.fetchPidsFromMap()
-				var response ipc.CommandResponse
-				response.Type = ipc.CmdGetPids
-				response.Payload = &ipc.PidListResponse{PIDs: pids, Error: ""}
 				d.log.Printf("Sending currently tracked pids: %v", pids)
-				d.commandChannelWrite <- response
-				d.commandMutex.Unlock()
 
 			default:
 				d.log.Printf("Unknown command type: %s", cmd.Type)
@@ -222,6 +212,7 @@ func (d *PolicyEngine) commandSocketReader(ctx context.Context, decoder *gob.Dec
 			errChan <- fmt.Errorf("error decoding message: %w", err)
 			return
 		}
+		d.log.Debug("command Socket read something: %v", *msg.Command)
 
 		// Use a select to avoid blocking if the command channel is full or the context is canceled.
 		select {
@@ -285,8 +276,11 @@ func (d *PolicyEngine) tracesSocketReader(ctx context.Context, decoder *gob.Deco
 // NewPolicyEngine creates and initializes the main policy engine.
 func NewPolicyEngine() *PolicyEngine {
 	return &PolicyEngine{
-		Workers: make(map[uint64]*PolicyEngineWorker),
-		log:     logrus.New(),
+		Workers:             make(map[uint64]*PolicyEngineWorker),
+		log:                 logrus.New(),
+		commandChannelRead:  make(chan ipc.Command),
+		commandChannelWrite: make(chan ipc.CommandResponse),
+		traceEventsChannel:  make(chan ipc.BpfSyscallEvent, 256),
 	}
 }
 
@@ -358,10 +352,10 @@ func (pe *PolicyEngine) Shutdown() {
 	}
 }
 
-func (pe *PolicyEngine) fetchPidsFromMap() []uint32 {
-	var collectedPids []uint32
+func (pe *PolicyEngine) fetchPidsFromMap() []uint64 {
+	var collectedPids []uint64
 	pe.Pids.Range(func(key, value any) bool {
-		if pid, ok := key.(uint32); ok {
+		if pid, ok := key.(uint64); ok {
 			collectedPids = append(collectedPids, pid)
 		}
 		return true
