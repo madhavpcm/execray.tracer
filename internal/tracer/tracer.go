@@ -90,7 +90,8 @@ type Daemon struct {
 	// IPC
 	// Channel to send events from tracer to the single client handler.
 	traceEventsChannel chan ipc.BpfSyscallEvent
-	ebpfEventsChannel  chan []byte
+	// Read from kernel to here
+	ebpfEventsChannel chan []byte
 	// Channel to parse tracerctl commands
 	commandChannelRead  chan ipc.Command
 	commandChannelWrite chan ipc.CommandResponse
@@ -138,7 +139,7 @@ func (d *Daemon) Serve() error {
 	})
 
 	g.Go(func() error {
-		return d.serveSocket(gCtx, ipc.SocketPathCommands)
+		return d.serveSocket(gCtx, ipc.TracerdCommandsSocket)
 	})
 
 	g.Go(func() error {
