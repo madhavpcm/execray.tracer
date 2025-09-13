@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	ipc.Init()
 	log := logrus.New()
 	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 
@@ -33,6 +34,7 @@ func run(ctx context.Context, log *logrus.Logger) error {
 
 	// Create and configure the policy engine.
 	engine := policyd.NewPolicyEngine()
+	engine.Init()
 
 	// FIXME: Compiler should generate DAG nodes and return a root
 
@@ -55,44 +57,9 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	engine.RegisterPolicy(1, openThenWritePolicy)
 	log.Info("Sample policy 'open -> write' registered.")
 
-	// FIXME: Dynamically Track Pid
-	engine.TrackPid(10000)
-	// Connect to the tracer daemon's event stream.
-	eventChan, conn, err := ipc.StreamEvents(ipc.SocketPathTraces)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	log.Info("Successfully connected to tracer daemon. Waiting for events...")
-
-	// Start a goroutine to process events.
-	go func() {
-		for {
-			select {
-			case event, ok := <-eventChan:
-				if !ok {
-					log.Warn("Event channel closed by sender.")
-					return
-				}
-				// Track any new PID we haven't seen before.
-				if _, exists := engine.Pids.Load(event.Pid); !exists {
-					engine.TrackPid(event.Pid)
-				}
-				engine.HandleEvent(event)
-			case <-ctx.Done():
-				// The context was canceled, so stop processing.
-				log.Info("Stopping event processing loop.")
-				return
-			}
-		}
-	}()
-
-	// Wait here until the shutdown signal is received.
-	<-ctx.Done()
+	engine.Serve()
 
 	// Cleanly shut down the engine and its workers.
-	log.Info("Shutdown signal received. Shutting down engine...")
 	engine.Shutdown()
 
 	return nil

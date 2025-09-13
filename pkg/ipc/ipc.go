@@ -8,8 +8,9 @@ import (
 )
 
 // FIXME add flags for this?
-const SocketPathTraces = "/var/run/tracerd.traces.sock"
-const SocketPathCommands = "/var/run/tracerd.commands.sock"
+const TracerdCommandsSocket = "/var/run/tracerd.commands.sock"
+const PolicydCommandsSocket = "/tmp/policyd.commands.sock"
+const PolicydTracesSocket = "/tmp/policyd.traces.sock"
 
 // Command is sent from client to daemon.
 // Add Pid <>
@@ -100,10 +101,10 @@ type Client struct {
 }
 
 // New creates and returns a new Client connected to the daemon's socket.
-func NewClient() (*Client, error) {
-	conn, err := net.Dial("unix", SocketPathCommands)
+func NewClient(socket string) (*Client, error) {
+	conn, err := net.Dial("unix", socket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to daemon socket at %s: %w", SocketPathTraces, err)
+		return nil, fmt.Errorf("failed to connect to daemon socket at %s: %w", socket, err)
 	}
 
 	return &Client{
@@ -153,15 +154,6 @@ func (c *Client) GetPids() error {
 	if err := c.sendCommand(CmdGetPids, nil); err != nil {
 		return err
 	}
-	var response Message
-	if err := c.decoder.Decode(&response); err != nil {
-		log.Fatalf("Failed to receive response: %v", err)
-	}
-	if payload, ok := response.CommandResponse.Payload.(PidListResponse); ok {
-		log.Printf("Received list of %d PIDs: [%v]", len(payload.PIDs), payload.PIDs)
-	} else {
-		log.Printf("Received an unexpected message type from the daemon: %v", response)
-	}
 	return nil
 }
 
@@ -189,18 +181,4 @@ func StreamEvents(socketPath string) (chan BpfSyscallEvent, net.Conn, error) {
 	}()
 
 	return eventChan, conn, nil
-}
-
-// Add convenience function to create traces client
-func NewTracesClient() (*Client, error) {
-	conn, err := net.Dial("unix", SocketPathTraces)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to traces socket: %w", err)
-	}
-
-	return &Client{
-		conn:    conn,
-		encoder: gob.NewEncoder(conn),
-		decoder: gob.NewDecoder(conn),
-	}, nil
 }

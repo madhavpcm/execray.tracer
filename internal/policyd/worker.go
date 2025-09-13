@@ -63,6 +63,7 @@ func (re *PolicyEngineWorker) EventHandler(event ipc.BpfSyscallEvent) {
 						"pid":      event.Pid,
 						"policyId": re.PolicyId,
 						"action":   currentState.Action,
+						"syscall":  event.SyscallNr,
 					}).Info("Policy matched and completed!")
 				}
 			}

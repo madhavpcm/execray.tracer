@@ -19,8 +19,11 @@ var rootCmd = &cobra.Command{
 tracerd daemon over a Unix socket.`,
 }
 
+var targetSocket = ""
+
 // Execute is the main entry point for the Cobra CLI.
-func Execute() {
+func Execute(socket string) {
+	targetSocket = socket
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -55,17 +58,15 @@ var addPidCmd = &cobra.Command{
 		}
 		pid := uint32(pidVal)
 
-		// 2. Create a new client to communicate with the daemon.
-		c, err := ipc.NewClient()
+		c, err := ipc.NewClient(targetSocket)
 		if err != nil {
 			return err
 		}
-		defer c.Close()
 
-		// 3. Make the IPC call to add the PID.
 		if err := c.AddPid(pid); err != nil {
 			return fmt.Errorf("failed to send AddPid command: %w", err)
 		}
+		c.Close()
 
 		fmt.Printf("Successfully requested to add PID %d to the trace list.\n", pid)
 		return nil
@@ -84,16 +85,15 @@ var removePidCmd = &cobra.Command{
 		pid := uint32(pidVal)
 
 		// 2. Create a new client to communicate with the daemon.
-		c, err := ipc.NewClient()
+		c, err := ipc.NewClient(targetSocket)
 		if err != nil {
 			return err
 		}
-		defer c.Close()
 
-		// 3. Make the IPC call to add the PID.
 		if err := c.RemovePid(pid); err != nil {
 			return fmt.Errorf("failed to send AddPid command: %w", err)
 		}
+		c.Close()
 
 		fmt.Printf("Successfully requested to remove PID %d from the trace list.\n", pid)
 		return nil
@@ -104,7 +104,7 @@ var getPidsCmd = &cobra.Command{
 	Short: "Add a specific PID to the trace list.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// 2. Create a new client to communicate with the daemon.
-		c, err := ipc.NewClient()
+		c, err := ipc.NewClient(targetSocket)
 		if err != nil {
 			return err
 		}
