@@ -204,23 +204,17 @@ func (d *Daemon) serveSocket(ctx context.Context, socketPath string) error {
 			}
 		}
 
-		// Handle the new connection in its own goroutine
+		// Handle the new connection in own goroutine
 		go d.handleSocketConnection(ctx, conn, errChan)
 	}
 }
 func (d *Daemon) handleSocketConnection(ctx context.Context, conn net.Conn, errChan chan<- error) {
 
 	// handle socket io in 2 r/w loops
-	switch conn.LocalAddr().String() {
-	case ipc.SocketPathTraces:
-		go d.tracesSocketWriter(ctx, gob.NewEncoder(conn), errChan)
-	case ipc.SocketPathCommands:
-		go d.commandSocketWriter(ctx, gob.NewEncoder(conn), errChan)
-		go d.commandSocketReader(ctx, gob.NewDecoder(conn), errChan)
-	}
+	go d.commandSocketWriter(ctx, gob.NewEncoder(conn), errChan)
+	go d.commandSocketReader(ctx, gob.NewDecoder(conn), errChan)
 
 	d.log.Infof("New client connection established. %s", conn.LocalAddr().String())
-
 	<-ctx.Done()
 	d.log.Printf("socket connection handler: parent context canceled: %v", ctx.Err())
 }

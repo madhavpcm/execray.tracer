@@ -165,34 +165,42 @@ func (c *Client) GetPids() error {
 	return nil
 }
 
-//// StreamEvents connects to the daemon and listens for eBPF events.
-//// This is a blocking call. It will send events to the provided eventChan.
-//// The operation can be cancelled via the context.
-//func (c *Client) StreamEvents(ctx context.Context, eventChan chan<- protocol.BpfSyscallEvent) error {
-//	// Goroutine to close the connection when the context is canceled.
-//	// This will cause the decoder.Decode() to unblock with an error.
-//	go func() {
-//		<-ctx.Done()
-//		c.conn.Close()
-//	}()
-//
-//	for {
-//		var event protocol.BpfSyscallEvent
-//		if err := c.decoder.Decode(&event); err != nil {
-//			// If the context was canceled, we expect an error here, so we return nil.
-//			select {
-//			case <-ctx.Done():
-//				return context.Canceled
-//			default:
-//				return fmt.Errorf("failed to decode event from daemon: %w", err)
-//			}
-//		}
-//
-//		// Send the decoded event to the channel.
-//		select {
-//		case eventChan <- event:
-//		case <-ctx.Done():
-//			return context.Canceled
-//		}
-//	}
-//}
+// Add this to ipc.go - replace the commented version
+func StreamEvents(socketPath string) (chan BpfSyscallEvent, net.Conn, error) {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to traces socket: %w", err)
+	}
+
+	decoder := gob.NewDecoder(conn)
+	// Buffer
+	eventChan := make(chan BpfSyscallEvent, 256)
+
+	go func() {
+		defer close(eventChan)
+		for {
+			var event BpfSyscallEvent
+			if err := decoder.Decode(&event); err != nil {
+				log.Printf("StreamEvents decode error: %v", err)
+				return
+			}
+			eventChan <- event
+		}
+	}()
+
+	return eventChan, conn, nil
+}
+
+// Add convenience function to create traces client
+func NewTracesClient() (*Client, error) {
+	conn, err := net.Dial("unix", SocketPathTraces)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to traces socket: %w", err)
+	}
+
+	return &Client{
+		conn:    conn,
+		encoder: gob.NewEncoder(conn),
+		decoder: gob.NewDecoder(conn),
+	}, nil
+}

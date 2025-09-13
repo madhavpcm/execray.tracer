@@ -64,3 +64,13 @@ sudo ./tracercli add pid 345 #adds pid to tracking list
 sudo ./tracercli remove pid 345 # removes pid from tracking list
 sudo ./tracercli get pids # gets tracking list
 ```
+
+
+### ruled
+
+Run this before pressing enter key on tester.py, so that it can connect to the tracer before the syscalls start streaming.
+
+```bash
+go build ./cmd/ruled/
+sudo ./ruled
+```
