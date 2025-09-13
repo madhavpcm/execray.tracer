@@ -353,7 +353,7 @@ func (re *PolicyEngineWorker) handleFSMEvent(event ipc.BpfSyscallEvent) {
 	now := time.Now()
 
 	// Clean up expired executions first
-	re.cleanupExpiredExecutions(now)
+	// re.cleanupExpiredExecutions(now)
 
 	// Process existing executions for this PID
 	if executions, exists := re.pidExecutions[event.Pid]; exists {

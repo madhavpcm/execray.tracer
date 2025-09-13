@@ -34,18 +34,14 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	configPath := os.Getenv("POLICY_CONFIG_PATH")
 	if configPath == "" {
 		configPath = "./policies"
-  }
+	}
 	// Create and configure the policy engine.
-	engine := policyd.NewPolicyEngine()
-	engine.Init()
-
-	// FIXME: Compiler should generate DAG nodes and return a root
-
 
 	log.WithField("configPath", configPath).Info("Using policy configuration directory")
 
 	// Create and configure the policy engine with FSM-based policy loading
 	engine := policyd.NewPolicyEngine(configPath)
+	engine.Init()
 
 	// Load policies from configuration directory
 	if err := engine.LoadPolicies(); err != nil {
@@ -70,7 +66,6 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	// Start policy file watcher for hot-reloading
 	engine.StartPolicyWatcher()
 	log.Info("Policy file watcher started for hot-reloading")
-
 
 	engine.Serve()
 	<-ctx.Done()

@@ -1,14 +1,14 @@
 package policyd
 
 import (
-	"fmt"
-	"sync"
 	"context"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,10 +21,10 @@ import (
 type PolicyEngine struct {
 	loader     *PolicyLoader
 	ConfigPath string
-	Workers  map[uint64]*PolicyEngineWorker
-	Pids     sync.Map
-	workerMu sync.RWMutex
-	log      *logrus.Logger
+	Workers    map[string]*PolicyEngineWorker
+	Pids       sync.Map
+	workerMu   sync.RWMutex
+	log        *logrus.Logger
 	// syscall events come here from socket
 	traceEventsChannel chan ipc.BpfSyscallEvent
 	// Channel to parse tracerctl commands
@@ -274,22 +274,18 @@ func (d *PolicyEngine) tracesSocketReader(ctx context.Context, decoder *gob.Deco
 }
 
 // NewPolicyEngine creates and initializes the main policy engine.
-func NewPolicyEngine() *PolicyEngine {
+func NewPolicyEngine(configPath string) *PolicyEngine {
 	engine := &PolicyEngine{
-		Workers:             make(map[uint64]*PolicyEngineWorker),
+		Workers:             make(map[string]*PolicyEngineWorker),
 		log:                 logrus.New(),
 		commandChannelRead:  make(chan ipc.Command),
 		commandChannelWrite: make(chan ipc.CommandResponse),
 		traceEventsChannel:  make(chan ipc.BpfSyscallEvent, 256),
-    Workers:    make(map[string]*PolicyEngineWorker),
-		log:        logrus.New(),
-		ConfigPath: configPath,
-	}
-  if configPath != "" {
-		engine.loader = NewPolicyLoader(configPath)
 	}
 	// Initialize policy loader if config path is provided
-
+	if configPath != "" {
+		engine.loader = NewPolicyLoader(configPath)
+	}
 
 	return engine
 }
