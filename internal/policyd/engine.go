@@ -1,30 +1,16 @@
 package policyd
 
 import (
-	"errors"
 	"sync"
 
 	"execray.tracer/pkg/ipc"
-
 	"github.com/sirupsen/logrus"
 )
 
-// Policy represents a single node in a policy's Finite State Machine (FSM).
-type Policy struct {
-	SyscallNr   uint64 // The syscall number this node matches.
-	Name        string
-	Description string
-	Action      string  // "log", "alert" - typically used on the final node.
-	Next        *Policy // Pointer to the next state in the FSM. If nil, this is the end of the policy chain.
-}
-
 // PolicyEngine is the central daemon that oversees all policies and workers.
 type PolicyEngine struct {
-	// The single, authoritative map of all active policy workers.
-	Workers map[uint64]*PolicyEngineWorker
-	// The master set of PIDs that the engine is monitoring.
-	Pids sync.Map // Replace map and mutex with sync.Map
-	// Mutexes to protect shared access to the maps.
+	Workers  map[uint64]*PolicyEngineWorker
+	Pids     sync.Map
 	workerMu sync.RWMutex
 	log      *logrus.Logger
 }
@@ -37,7 +23,7 @@ func NewPolicyEngine() *PolicyEngine {
 	}
 }
 
-// RegisterPolicy creates a new worker for the given policy and adds it to the engine.
+// RegisterPolicy creates a new worker, adds it, and starts its goroutine.
 func (pe *PolicyEngine) RegisterPolicy(policyId uint64, rootNode *Policy) {
 	worker := NewPolicyEngineWorker(policyId)
 	worker.PolicyRoot = rootNode
@@ -45,40 +31,62 @@ func (pe *PolicyEngine) RegisterPolicy(policyId uint64, rootNode *Policy) {
 	pe.workerMu.Lock()
 	defer pe.workerMu.Unlock()
 	pe.Workers[policyId] = worker
-	pe.log.WithField("policyId", policyId).Info("Successfully registered new policy.")
+	// Launch the worker in its own goroutine to listen for events.
+	worker.Start()
 }
 
-// Broadcast sends the event to all registered workers.
+// UnregisterPolicy stops a worker's goroutine and removes it from the engine.
+func (pe *PolicyEngine) UnregisterPolicy(policyId uint64) {
+	pe.workerMu.Lock()
+	defer pe.workerMu.Unlock()
+	if worker, exists := pe.Workers[policyId]; exists {
+		worker.Stop()
+		delete(pe.Workers, policyId)
+		pe.log.WithField("policyId", policyId).Info("Unregistered and stopped policy worker.")
+	}
+}
+
+// Broadcast sends the event to all registered workers via their channels.
 func (pe *PolicyEngine) Broadcast(event ipc.BpfSyscallEvent) {
 	pe.workerMu.RLock()
 	defer pe.workerMu.RUnlock()
 	for _, worker := range pe.Workers {
-		worker.TraceHandler(event)
+		// Use a non-blocking send to prevent a slow worker from blocking the engine.
+		select {
+		case worker.eventChan <- event:
+			// Event sent successfully.
+		default:
+			// The worker's channel buffer is full, so we drop the event for this worker.
+			pe.log.WithField("policyId", worker.PolicyId).Warn("Worker channel full. Dropping event.")
+		}
 	}
 }
 
 // HandleEvent is the main entry point for incoming syscall events.
 func (pe *PolicyEngine) HandleEvent(event ipc.BpfSyscallEvent) {
-	// The Load operation is highly optimized and often lock-free.
 	if _, isTracked := pe.Pids.Load(event.Pid); isTracked {
 		pe.Broadcast(event)
 	}
 }
+
+// TrackPid adds a PID to the master list of monitored processes.
 func (pe *PolicyEngine) TrackPid(pid uint64) {
-	// Use Store to add or update a key. The value can be a simple placeholder.
 	pe.Pids.Store(pid, true)
 	pe.log.WithField("pid", pid).Info("Started tracking new PID.")
 }
+
+// UntrackPid removes a PID from the master list.
 func (pe *PolicyEngine) UntrackPid(pid uint64) {
-	// Use Delete to remove a key.
 	pe.Pids.Delete(pid)
-	pe.log.WithField("pid", pid).Info("Stopped tracking PID.")
+	pe.log.WithField("pid", pid).Info("Stopped tracking new PID.")
 }
 
-// Dummy Event Handler
-func (policy *Policy) EvaluatePolicyOnEvent(event ipc.BpfSyscallEvent) (*Policy, error) {
-	if policy.SyscallNr == event.SyscallNr {
-		return policy.Next, nil
+// Shutdown gracefully stops all running worker goroutines.
+func (pe *PolicyEngine) Shutdown() {
+	pe.workerMu.Lock()
+	defer pe.workerMu.Unlock()
+	pe.log.Info("Shutting down all policy workers...")
+	for _, worker := range pe.Workers {
+		worker.Stop()
 	}
-	return nil, errors.New("syscall mismatch")
 }

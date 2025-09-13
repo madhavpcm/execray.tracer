@@ -5,12 +5,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type PolicyExecutionIdentifier struct {
-	Pid      uint64
-	PolicyId uint64
-}
-
-// PolicyEngineWorker manages the execution state of a single policy against multiple PIDs.
+// PolicyEngineWorker manages the execution state of a single policy.
 type PolicyEngineWorker struct {
 	PolicyId              uint64
 	PolicyRoot            *Policy
@@ -18,8 +13,11 @@ type PolicyEngineWorker struct {
 	executions_state      map[uint64]*Policy
 	execution_counter     uint64
 	log                   *logrus.Logger
+	// Each worker gets a dedicated channel for receiving events.
+	eventChan chan ipc.BpfSyscallEvent
 }
 
+// NewPolicyEngineWorker creates a new worker, including its event channel.
 func NewPolicyEngineWorker(policyId uint64) *PolicyEngineWorker {
 	return &PolicyEngineWorker{
 		PolicyId:              policyId,
@@ -27,10 +25,29 @@ func NewPolicyEngineWorker(policyId uint64) *PolicyEngineWorker {
 		pid_execution_tracker: make(map[uint64]map[uint64]struct{}),
 		executions_state:      make(map[uint64]*Policy),
 		execution_counter:     0,
+		// A buffered channel helps absorb bursts of events without dropping them.
+		eventChan: make(chan ipc.BpfSyscallEvent, 100),
 	}
 }
 
-// TraceHandler processes a syscall event and updates the FSM for all relevant policy executions.
+// Start launches the worker's main processing loop in a dedicated goroutine.
+func (re *PolicyEngineWorker) Start() {
+	re.log.WithField("policyId", re.PolicyId).Info("Worker starting...")
+	go func() {
+		// This loop will run until the eventChan is closed.
+		for event := range re.eventChan {
+			re.TraceHandler(event)
+		}
+		re.log.WithField("policyId", re.PolicyId).Info("Worker stopped.")
+	}()
+}
+
+// Stop gracefully shuts down the worker by closing its channel.
+func (re *PolicyEngineWorker) Stop() {
+	close(re.eventChan)
+}
+
+// TraceHandler processes a single event. It's called by the worker's own goroutine.
 func (re *PolicyEngineWorker) TraceHandler(event ipc.BpfSyscallEvent) {
 	if active_executions, ok := re.pid_execution_tracker[event.Pid]; ok {
 		for exec_id := range active_executions {
@@ -45,7 +62,7 @@ func (re *PolicyEngineWorker) TraceHandler(event ipc.BpfSyscallEvent) {
 						"pid":      event.Pid,
 						"policyId": re.PolicyId,
 						"action":   currentState.Action,
-					}).Info("Policy matched and completed successfully!")
+					}).Info("Policy matched and completed!")
 				}
 			}
 		}
@@ -58,13 +75,6 @@ func (re *PolicyEngineWorker) TraceHandler(event ipc.BpfSyscallEvent) {
 			}
 			re.pid_execution_tracker[event.Pid][exec_id] = struct{}{}
 			re.executions_state[exec_id] = nextNode
-			if nextNode == nil {
-				re.log.WithFields(logrus.Fields{
-					"pid":      event.Pid,
-					"policyId": re.PolicyId,
-					"action":   re.PolicyRoot.Action,
-				}).Info("Single-node policy matched and completed successfully!")
-			}
 		}
 	}
 }
