@@ -28,8 +28,6 @@ type PolicyEngine struct {
 	// Channel to parse tracerctl commands
 	commandChannelRead  chan ipc.Command
 	commandChannelWrite chan ipc.CommandResponse
-
-	commandMutex sync.Mutex
 }
 
 func (d *PolicyEngine) Serve() error {
@@ -212,7 +210,6 @@ func (d *PolicyEngine) commandSocketReader(ctx context.Context, decoder *gob.Dec
 			errChan <- fmt.Errorf("error decoding message: %w", err)
 			return
 		}
-		d.log.Debug("command Socket read something: %v", *msg.Command)
 
 		// Use a select to avoid blocking if the command channel is full or the context is canceled.
 		select {
