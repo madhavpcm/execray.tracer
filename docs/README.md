@@ -34,7 +34,11 @@ make all
 
 ### policyd
 
-Run this before Running tracerd, tracerd will connect as a client to policyd and push events to policyd so that it can consume
+Run this before Running tracerd, tracerd will connect as a client to policyd and push events to policyd so that it can consume. It has 2 sockets, one for traces and the other for commands.
+```go
+const PolicydCommandsSocket = "/tmp/policyd.commands.sock"
+const PolicydTracesSocket = "/tmp/policyd.traces.sock"
+```
 
 ```bash
 go build ./cmd/policyd/
@@ -58,7 +62,7 @@ const TracerdCommandsSocket = "/var/run/tracerd.commands.sock"
 
 #### tracercli/policycli
 
-You can run `sudo ./tracercli` for CLI help and autocompletions.
+You can run `sudo ./tracercli` for CLI help and autocompletions. policycli doesn't need sudo privileges.
 
 ```
 Usage:
