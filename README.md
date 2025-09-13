@@ -82,7 +82,7 @@ tracercli add pid <pid>
 | [eBPF Integration](docs/EBPF_INTEGRATION.md) | Syscall capture and kernel integration details |
 | [Performance Analysis](docs/PERFORMANCE.md) | Benchmarks, metrics, and optimization details |
 | [Setup Guide](docs/SETUP.md) | Detailed installation and configuration |
-| [Innovation Overview](docs/INNOVATION.md) | Technical highlights and competitive advantages |
+| [Innovation Overview](docs/INNOVATION.md) | Technical highlights |
 
 
 ### Custom DSL Compiler Pipeline
