@@ -1,0 +1,3 @@
+path "malicious_file_access" {
+    openat { pathname="/etc/passwd" }
+}
