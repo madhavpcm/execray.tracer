@@ -123,21 +123,9 @@ Policy Source → Lexer → Parser → AST → Semantic Analysis → FSM Generat
 4. **Software Engineering**: Comprehensive testing and error handling
 5. **Real-time Processing**: Hot-reload and dynamic policy updates
 
-## Live Demonstration
+## Live Demonstration link:
 
-### Demo Scenario: Detecting Advanced Persistent Threats
-
-## Project Statistics
-
-- **Language**: Go (100% type-safe)
-- **Code Coverage**: 123+ comprehensive tests
-- **Architecture**: Modular, production-ready design
-- **Performance**: Sub-5ms detection latency
-- **Scalability**: Hundreds of concurrent policies
-- **Documentation**: Complete technical specifications
-
-## Future Roadmap
-
+# Future Roadmap
 - Machine Learning Integration**: Anomaly detection with policy patterns
 - Distributed Deployment**: Multi-host policy coordination
 - Visualization Dashboard**: Real-time threat monitoring UI
@@ -145,9 +133,7 @@ Policy Source → Lexer → Parser → AST → Semantic Analysis → FSM Generat
 - Extended Syscall Support**: Beyond openat/execve/write
 - Explore uretprobes so that return values from syscalls can also be tracked
 - A sys call dump -> Policy + Optimizer
-  
-Add directives to DSL to detect static hardware from Kernel instead of coding it in (Eg. /dev/input/some_input_device)
-
+- Add directives to DSL to detect static hardware from Kernel instead of coding it in (Eg. /dev/input/some_input_device)
 
 ---
 by gomodtidy
