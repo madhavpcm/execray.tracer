@@ -10,5 +10,5 @@ import (
 func main() {
 	ipc.Init()
 	cli.Init()
-	cli.Execute(ipc.TracerdCommandsSocket)
+	cli.Execute(ipc.PolicydCommandsSocket)
 }

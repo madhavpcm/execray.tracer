@@ -19,31 +19,50 @@ Generate your linux headers in the `./internal/tracer` directory
 
 go generate ./internal/tracer # generate bpf objects and embeds them in go binaries
 
-##FIXME may fail with some C build issue, in that case, temporarily move tracer.bpf.c somewhere else
-go build ./cmd/tracerd # builds ./tracerd
-go build ./cmd/tracercli #  builds ./tracercli
+go build ./cmd/tracerd
+go build ./cmd/tracercli
+go build ./cmd/policyd
+go build ./cmd/policycli
+# OR
+make all
+
+
 
 ```
 
 ### Run
+
+### policyd
+
+Run this before Running tracerd, tracerd will connect as a client to policyd and push events to policyd so that it can consume. It has 2 sockets, one for traces and the other for commands.
+```go
+const PolicydCommandsSocket = "/tmp/policyd.commands.sock"
+const PolicydTracesSocket = "/tmp/policyd.traces.sock"
+```
+
+```bash
+go build ./cmd/policyd/
+./policyd
+```
 
 #### tracerd
 
 ```
 sudo ./tracerd
 ```
-This should start the daemon, it listens to a command socket and sends to a tracer socket.
-We need it to be either TCP/Unix sockets so that syscalls are delivered in order.
+This should start the tracing daemon, it listens to a command socket and sends to a tracer socket.
+We need it to be either TCP/Unix sockets so that syscalls are delivered in order. 
+
+tracerd is run as superuser as ebpf needs elevated privileges
 
 ```go
-const SocketPathTraces = "/var/run/tracerd.traces.sock" // daemon spits traced syscalls here (NEED to TEST)
 
-const SocketPathCommands = "/var/run/tracerd.commands.sock" // daemon can be controlled via this socket
+const TracerdCommandsSocket = "/var/run/tracerd.commands.sock"
 ```
 
-#### tracercli
+#### tracercli/policycli
 
-You can run `sudo ./tracercli` for CLI help and autocompletions.
+You can run `sudo ./tracercli` for CLI help and autocompletions. policycli doesn't need sudo privileges.
 
 ```
 Usage:
@@ -65,12 +84,3 @@ sudo ./tracercli remove pid 345 # removes pid from tracking list
 sudo ./tracercli get pids # gets tracking list
 ```
 
-
-### ruled
-
-Run this before pressing enter key on tester.py, so that it can connect to the tracer before the syscalls start streaming.
-
-```bash
-go build ./cmd/ruled/
-sudo ./ruled
-```

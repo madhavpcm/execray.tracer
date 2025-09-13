@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	ipc.Init()
 	log := logrus.New()
 	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 
@@ -30,11 +31,17 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	ipc.Init() // Initialize gob types for IPC.
 	log.Info("Starting Policy Engine...")
 
-	// Determine config path - default to local policies directory
 	configPath := os.Getenv("POLICY_CONFIG_PATH")
 	if configPath == "" {
 		configPath = "./policies"
-	}
+  }
+	// Create and configure the policy engine.
+	engine := policyd.NewPolicyEngine()
+	engine.Init()
+
+	// FIXME: Compiler should generate DAG nodes and return a root
+
+
 	log.WithField("configPath", configPath).Info("Using policy configuration directory")
 
 	// Create and configure the policy engine with FSM-based policy loading
@@ -64,44 +71,10 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	engine.StartPolicyWatcher()
 	log.Info("Policy file watcher started for hot-reloading")
 
-	// Set up dynamic PID tracking
-	engine.TrackPid(10000) // Default PID for compatibility
-	// Connect to the tracer daemon's event stream.
-	eventChan, conn, err := ipc.StreamEvents(ipc.SocketPathTraces)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
 
-	log.Info("Successfully connected to tracer daemon. Waiting for events...")
-
-	// Start a goroutine to process events.
-	go func() {
-		for {
-			select {
-			case event, ok := <-eventChan:
-				if !ok {
-					log.Warn("Event channel closed by sender.")
-					return
-				}
-				// Track any new PID we haven't seen before.
-				if _, exists := engine.Pids.Load(event.Pid); !exists {
-					engine.TrackPid(event.Pid)
-				}
-				engine.HandleEvent(event)
-			case <-ctx.Done():
-				// The context was canceled, so stop processing.
-				log.Info("Stopping event processing loop.")
-				return
-			}
-		}
-	}()
-
-	// Wait here until the shutdown signal is received.
+	engine.Serve()
 	<-ctx.Done()
 
-	// Cleanly shut down the engine and its workers.
-	log.Info("Shutdown signal received. Shutting down engine...")
 	engine.Shutdown()
 
 	return nil
