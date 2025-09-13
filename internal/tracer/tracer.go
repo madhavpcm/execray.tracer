@@ -307,7 +307,7 @@ func (d *Daemon) traceSender(ctx context.Context) error {
 			// Attempt to encode and send the event.
 			if err := encoder.Encode(&event); err != nil {
 				// If sending fails, report the error and exit.
-				d.log.Errorf("error encoding trace event: %w", err)
+				d.log.Errorf("error encoding trace event: %v", err)
 			}
 		}
 	}
