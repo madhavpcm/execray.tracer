@@ -1,21 +1,20 @@
-# ExecRay Tracer: Real-time Malicious Codepath Detection 🛡️
+# ExeRay Tracer: Real-time Malicious Codepath Detection 🛡️
 
 [![Go Tests](https://img.shields.io/badge/tests-123%2B%20passing-brightgreen)](#testing)
 [![eBPF](https://img.shields.io/badge/eBPF-enabled-blue)](#ebpf-integration)
 [![DSL](https://img.shields.io/badge/DSL-custom%20compiler-orange)](#dsl-language)
 [![Hot Reload](https://img.shields.io/badge/policies-hot%20reload-red)](#policy-engine)
 
-> **🏆 Hackathon Project**: A revolutionary cybersecurity tool that uses a custom domain-specific language (DSL) and eBPF integration to detect malicious execution patterns in real-time.
+> ** Project**: A revolutionary cybersecurity tool that uses a custom domain-specific language (DSL) and eBPF integration to detect malicious execution patterns in real-time.
 
-## 🚀 Innovation Highlights
+## Highlights
 
 - **🔤 Custom DSL**: Purpose-built domain-specific language for defining security policies
 - **⚡ Real-time Compilation**: Live DSL → AST → FSM transformation with hot-reload
 - **🔍 eBPF Integration**: High-performance syscall capture using Linux kernel technology
 - **🎯 Pattern Matching**: Advanced finite state machine execution for threat detection
-- **📊 Comprehensive Testing**: 123+ tests with 100% pass rate ensuring reliability
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -43,48 +42,7 @@
 4. **Pattern Matching** → FSM engines match syscall sequences against policies
 5. **Threat Detection** → Malicious patterns trigger alerts and responses
 
-## 🎯 Quick Demo
 
-### 1. **Policy Creation** (Custom DSL)
-```dsl
-// Example: Detect privilege escalation attempts
-path "privilege_escalation" {
-    openat { pathname =~ "/etc/passwd" }
-    write { content =~ ".*root.*" }
-}
-
-// Example: Detect keylogger activity  
-path "keylogger_detection" {
-    openat { pathname =~ "/dev/input.*" } ?
-    block "capture_keys" {
-        write { content =~ ".*key.*" }
-    } :
-    block "normal_activity" {
-        ...
-    }
-}
-```
-
-### 2. **Real-time Compilation & Execution**
-```bash
-# Start the policy engine with hot-reload
-go run cmd/policyd_demo/main.go
-
-# Output: Real-time policy compilation
-# ✅ Policy compiled: privilege_escalation (5 FSM states)  
-# ✅ Policy compiled: keylogger_detection (8 FSM states)
-# 🔍 Monitoring 3 policies for PID 1234...
-```
-
-### 3. **Live Threat Detection**
-```bash
-# Trigger policy match (simulated attack)
-echo "root:x:0:0:root:/root:/bin/bash" >> /tmp/test_passwd
-
-# Output: Immediate detection  
-# 🚨 THREAT DETECTED: privilege_escalation (PID: 1234)
-# 📊 Execution path: openat→write→TERMINAL (2.3ms)
-```
 
 ## 🛠️ Quick Start
 
@@ -96,44 +54,26 @@ echo "root:x:0:0:root:/root:/bin/bash" >> /tmp/test_passwd
 ### Installation & Demo
 
 ```bash
-# 1. Clone and build
-git clone <repository-url>
-cd execray.tracer
-go mod tidy && go build ./...
+sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+make
 
-# 2. Run comprehensive tests (optional but recommended)
-go test ./... -v
-# Expected: 123+ tests passing
+# Copy policies
+mkdir -p ./bin/policies
+cp ./policies/<required_policy> ./bin/policies/
 
-# 3. Start policy engine demo
-go run cmd/policyd_demo/main.go
-# Loads 3 example policies with real-time compilation
+# Must be run before tracerd
+./bin/policyd
+sudo ./bin/tracerd
 
-# 4. Try individual component demos
-go run cmd/lexer_example/main.go 'path "demo" { openat { pathname="/test" } }'
-go run cmd/parser_example/main.go 'path "demo" { execve { filename="/bin/sh" } }'
-go run cmd/fsm_example/main.go
+# Add pids to both tracing and policy evaluation daemon
+policycli add pid <pid>
+tracercli add pid <pid>
+
+# Observe logs
 ```
 
-### For Judges - Immediate Demo
 
-```bash
-# Quick validation that everything works
-cd execray.tracer
-
-# 1. Verify compilation
-go build ./...
-
-# 2. Run core tests  
-go test ./internal/compiler -v | grep PASS
-go test ./internal/policyd -v | grep PASS
-
-# 3. See live policy engine
-go run cmd/policyd_demo/main.go
-# Should show: 3 policies loaded, FSM states, real-time event processing
-```
-
-## 📚 Documentation
+## Documentation
 
 | Document | Description |
 |----------|-------------|
@@ -144,48 +84,17 @@ go run cmd/policyd_demo/main.go
 | [Setup Guide](docs/SETUP.md) | Detailed installation and configuration |
 | [Innovation Overview](docs/INNOVATION.md) | Technical highlights and competitive advantages |
 
-## 🧪 Technical Deep Dive
 
 ### Custom DSL Compiler Pipeline
 ```
 Policy Source → Lexer → Parser → AST → Semantic Analysis → FSM Generation → Execution Engine
 ```
 
-**Key Innovations:**
+**Key Highlights:**
 - **Hand-written recursive descent parser** with error recovery
 - **Real-time AST-to-FSM compilation** with state optimization  
 - **Hot-reload capability** without system restart
 - **Comprehensive testing framework** (123+ test functions)
-
-### Performance Characteristics
-- **Policy Compilation**: ~10 policies/second
-- **Event Processing**: ~10,000 syscalls/second  
-- **Memory Efficiency**: <50MB for 100+ active policies
-- **Detection Latency**: <5ms average response time
-
-## 🧪 Testing & Quality Assurance
-
-```bash
-# Run full test suite
-go test ./... -v
-
-# Expected Results:
-# ✅ Lexer Tests: 8 functions, 100% pass rate
-# ✅ Parser Tests: 11 functions, 100% pass rate  
-# ✅ Compiler Tests: 22 functions, 100% pass rate
-# ✅ FSM Tests: 8 functions, 100% pass rate
-# ✅ PolicyD Tests: 5 functions, 100% pass rate
-# ✅ Integration Tests: 5 functions, 100% pass rate
-# 
-# Total: 123+ tests, 100% pass rate
-```
-
-### Test Categories
-- **Unit Tests**: Individual component validation
-- **Integration Tests**: Cross-component interaction testing
-- **Performance Tests**: Benchmarking and load testing
-- **End-to-End Tests**: Complete pipeline validation
-- **Error Handling Tests**: Edge cases and failure scenarios
 
 ## 🔧 Demo Programs
 
@@ -198,7 +107,7 @@ go test ./... -v
 | **tracerd** | eBPF syscall tracer | `sudo go run cmd/tracerd/main.go` |
 | **policyd** | Policy engine daemon | `go run cmd/policyd/main.go` |
 
-## 🏆 Competitive Advantages
+## 
 
 ### vs. Traditional Security Tools
 - **Dynamic Policies**: Hot-reload vs. static configuration files
@@ -214,35 +123,11 @@ go test ./... -v
 4. **Software Engineering**: Comprehensive testing and error handling
 5. **Real-time Processing**: Hot-reload and dynamic policy updates
 
-## 📊 Live Demonstration
+## Live Demonstration
 
 ### Demo Scenario: Detecting Advanced Persistent Threats
 
-```bash
-# 1. Start monitoring
-go run cmd/policyd_demo/main.go
-
-# 2. Create custom threat policy (live coding)
-cat > policies/apt_detection.policy << EOF
-path "apt_stealth_backdoor" {
-    openat { pathname =~ "/tmp/.*\\.sh" }
-    execve { filename =~ "/bin/(sh|bash)" }
-    write { content =~ ".*(backdoor|payload).*" }
-}
-EOF
-
-# 3. Watch real-time compilation
-# Output: ✅ Policy compiled: apt_stealth_backdoor (7 FSM states)
-
-# 4. Trigger detection (simulated attack)
-echo "backdoor_payload" > /tmp/malicious.sh
-chmod +x /tmp/malicious.sh && /tmp/malicious.sh
-
-# 5. See immediate detection
-# Output: 🚨 THREAT: apt_stealth_backdoor detected (PID: 5678)
-```
-
-## 📈 Project Statistics
+## Project Statistics
 
 - **Language**: Go (100% type-safe)
 - **Code Coverage**: 123+ comprehensive tests
@@ -251,25 +136,18 @@ chmod +x /tmp/malicious.sh && /tmp/malicious.sh
 - **Scalability**: Hundreds of concurrent policies
 - **Documentation**: Complete technical specifications
 
-## 🌟 Future Roadmap
+## Future Roadmap
 
-- **Machine Learning Integration**: Anomaly detection with policy patterns
-- **Distributed Deployment**: Multi-host policy coordination
-- **Visualization Dashboard**: Real-time threat monitoring UI
-- **Cloud Integration**: Container and Kubernetes support
-- **Extended Syscall Support**: Beyond openat/execve/write
+- Machine Learning Integration**: Anomaly detection with policy patterns
+- Distributed Deployment**: Multi-host policy coordination
+- Visualization Dashboard**: Real-time threat monitoring UI
+- Cloud Integration**: Container and Kubernetes support
+- Extended Syscall Support**: Beyond openat/execve/write
+- Explore uretprobes so that return values from syscalls can also be tracked
+- A sys call dump -> Policy + Optimizer
+  
+Add directives to DSL to detect static hardware from Kernel instead of coding it in (Eg. /dev/input/some_input_device)
 
-## 🤝 For Judges & Technical Evaluation
-
-This project demonstrates:
-- **🔬 Deep Technical Knowledge**: Complete compiler implementation with testing
-- **🚀 Innovation**: Novel DSL approach to cybersecurity
-- **🏗️ Software Engineering**: Production-quality architecture and testing
-- **⚡ Performance**: Real-time processing with eBPF integration
-- **📈 Scalability**: Hot-reload and dynamic policy management
-
-**Ready for live demonstration** - All components tested and working reliably.
 
 ---
-
-**Built with ❤️ for cybersecurity innovation** | [Documentation](docs/) | [Demo Scripts](demo_scripts/) | [Policies](policies/)
+by gomodtidy
