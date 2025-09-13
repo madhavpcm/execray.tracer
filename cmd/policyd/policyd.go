@@ -8,7 +8,6 @@ import (
 
 	"execray.tracer/internal/policyd"
 	"execray.tracer/pkg/ipc"
-	"execray.tracer/pkg/syscalls"
 	"github.com/sirupsen/logrus"
 )
 
@@ -31,32 +30,42 @@ func run(ctx context.Context, log *logrus.Logger) error {
 	ipc.Init() // Initialize gob types for IPC.
 	log.Info("Starting Policy Engine...")
 
-	// Create and configure the policy engine.
-	engine := policyd.NewPolicyEngine()
+	// Determine config path - default to local policies directory
+	configPath := os.Getenv("POLICY_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "./policies"
+	}
+	log.WithField("configPath", configPath).Info("Using policy configuration directory")
 
-	// FIXME: Compiler should generate DAG nodes and return a root
+	// Create and configure the policy engine with FSM-based policy loading
+	engine := policyd.NewPolicyEngine(configPath)
 
-	writePolicy := &policyd.Policy{
-		SyscallNr:   syscalls.SYS_WRITE,
-		Name:        "file-write",
-		Description: "A file is being written to.",
-		Action:      "log", // The final action to take.
-		Next:        nil,   // This is the last step in the chain.
+	// Load policies from configuration directory
+	if err := engine.LoadPolicies(); err != nil {
+		log.WithError(err).Warn("Failed to load policies from config directory")
+		log.Info("Continuing with empty policy set - policies can be added dynamically")
+	} else {
+		workerCount := engine.GetWorkerCount()
+		log.WithField("workers", workerCount).Info("Policy loading completed")
+
+		if workerCount > 0 {
+			// Log information about loaded policies
+			workerInfo := engine.GetWorkerInfo()
+			for policyId, info := range workerInfo {
+				log.WithFields(logrus.Fields{
+					"policyId": policyId,
+					"info":     info,
+				}).Info("Policy worker active")
+			}
+		}
 	}
 
-	openThenWritePolicy := &policyd.Policy{
-		SyscallNr:   syscalls.SYS_OPENAT,
-		Name:        "file-open",
-		Description: "A file is opened, check for subsequent write.",
-		Next:        writePolicy, // Chain to the next policy node.
-	}
+	// Start policy file watcher for hot-reloading
+	engine.StartPolicyWatcher()
+	log.Info("Policy file watcher started for hot-reloading")
 
-	// Register the policy chain with the engine.
-	engine.RegisterPolicy(1, openThenWritePolicy)
-	log.Info("Sample policy 'open -> write' registered.")
-
-	// FIXME: Dynamically Track Pid
-	engine.TrackPid(10000)
+	// Set up dynamic PID tracking
+	engine.TrackPid(10000) // Default PID for compatibility
 	// Connect to the tracer daemon's event stream.
 	eventChan, conn, err := ipc.StreamEvents(ipc.SocketPathTraces)
 	if err != nil {

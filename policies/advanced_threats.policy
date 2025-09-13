@@ -1,0 +1,11 @@
+path "key_logger_detection" {
+    openat { pathname =~ "/dev/input.*" } ?
+        write { content =~ ".*key.*" }
+    :
+        execve { filename =~ ".*keylog.*" }
+}
+
+path "network_exfiltration" {
+    openat { pathname =~ "/etc/hosts.*" }
+    execve { filename =~ ".*(nc|netcat|curl|wget).*" }
+}

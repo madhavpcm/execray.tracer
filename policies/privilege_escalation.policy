@@ -1,0 +1,10 @@
+path "privilege_escalation" {
+    openat { pathname =~ "/etc/.*" }
+    execve { filename="/bin/sh" }
+    write { content =~ ".*root.*" }
+}
+
+path "sudo_abuse" {
+    execve { filename =~ ".*sudo.*" }
+    write { content =~ ".*password.*" }
+}
