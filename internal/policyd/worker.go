@@ -26,7 +26,7 @@ func NewPolicyEngineWorker(policyId uint64) *PolicyEngineWorker {
 		executions_state:      make(map[uint64]*Policy),
 		execution_counter:     0,
 		// A buffered channel helps absorb bursts of events without dropping them.
-		eventChan: make(chan ipc.BpfSyscallEvent, 100),
+		eventChan: make(chan ipc.BpfSyscallEvent, 256),
 	}
 }
 
@@ -36,7 +36,7 @@ func (re *PolicyEngineWorker) Start() {
 	go func() {
 		// This loop will run until the eventChan is closed.
 		for event := range re.eventChan {
-			re.TraceHandler(event)
+			re.EventHandler(event)
 		}
 		re.log.WithField("policyId", re.PolicyId).Info("Worker stopped.")
 	}()
@@ -47,8 +47,8 @@ func (re *PolicyEngineWorker) Stop() {
 	close(re.eventChan)
 }
 
-// TraceHandler processes a single event. It's called by the worker's own goroutine.
-func (re *PolicyEngineWorker) TraceHandler(event ipc.BpfSyscallEvent) {
+// EventHandler processes a single event. It's called by the worker's own goroutine.
+func (re *PolicyEngineWorker) EventHandler(event ipc.BpfSyscallEvent) {
 	if active_executions, ok := re.pid_execution_tracker[event.Pid]; ok {
 		for exec_id := range active_executions {
 			currentState := re.executions_state[exec_id]
@@ -57,6 +57,7 @@ func (re *PolicyEngineWorker) TraceHandler(event ipc.BpfSyscallEvent) {
 			}
 			if nextNode, err := currentState.EvaluatePolicyOnEvent(event); err == nil {
 				re.executions_state[exec_id] = nextNode
+				// FIXME: post to Notification Handler
 				if nextNode == nil {
 					re.log.WithFields(logrus.Fields{
 						"pid":      event.Pid,

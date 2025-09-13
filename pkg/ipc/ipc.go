@@ -173,7 +173,8 @@ func StreamEvents(socketPath string) (chan BpfSyscallEvent, net.Conn, error) {
 	}
 
 	decoder := gob.NewDecoder(conn)
-	eventChan := make(chan BpfSyscallEvent, 100)
+	// Buffer
+	eventChan := make(chan BpfSyscallEvent, 256)
 
 	go func() {
 		defer close(eventChan)

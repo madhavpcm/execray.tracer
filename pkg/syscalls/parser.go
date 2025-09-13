@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	__NR_openat = 56
-	__NR_write  = 64
-	__NR_execve = 221
-	DATA_LEN    = 256
+	SYS_OPENAT = 56
+	SYS_WRITE  = 64
+	SYS_EXECVE = 221
+	DATA_LEN   = 256
 )
 
 type SyscallDataParser interface {
@@ -18,9 +18,9 @@ type SyscallDataParser interface {
 }
 
 var syscallParserMap = map[uint64]func() SyscallDataParser{
-	__NR_openat: func() SyscallDataParser { return &openatEvent{} },
-	__NR_execve: func() SyscallDataParser { return &execveEvent{} },
-	__NR_write:  func() SyscallDataParser { return &writeEvent{} },
+	SYS_OPENAT: func() SyscallDataParser { return &openatEvent{} },
+	SYS_EXECVE: func() SyscallDataParser { return &execveEvent{} },
+	SYS_WRITE:  func() SyscallDataParser { return &writeEvent{} },
 }
 
 func SyscallParser(syscall uint64) (func() SyscallDataParser, error) {
