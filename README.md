@@ -5,7 +5,7 @@
 [![DSL](https://img.shields.io/badge/DSL-custom%20compiler-orange)](#dsl-language)
 [![Hot Reload](https://img.shields.io/badge/policies-hot%20reload-red)](#policy-engine)
 
-> ** Project**: A revolutionary cybersecurity tool that uses a custom domain-specific language (DSL) and eBPF integration to detect malicious execution patterns in real-time.
+> A tool which empowers Security Researchers by allowing them to declaratively write malicious behaviours and detect them in a machine agnostic way.
 
 ## Highlights
 
