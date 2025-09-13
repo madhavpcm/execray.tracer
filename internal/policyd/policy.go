@@ -15,7 +15,7 @@ type Policy struct {
 	Next        *Policy // Pointer to the next state in the FSM. If nil, this is the end of the policy chain.
 }
 
-// EvaluatePolicyOnEvent checks if the given event matches the current policy node.
+// FIXME evaluation
 func (p *Policy) EvaluatePolicyOnEvent(event ipc.BpfSyscallEvent) (*Policy, error) {
 	if p.SyscallNr == event.SyscallNr {
 		return p.Next, nil
